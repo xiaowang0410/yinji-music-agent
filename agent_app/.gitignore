@@ -1,0 +1,14 @@
+# 依赖与构建
+node_modules/
+dist/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+
+# 本地数据 / 密钥（勿提交）
+data/
+.env
+.env.*
+!.env.example

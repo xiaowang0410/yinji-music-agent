@@ -1,0 +1,16 @@
+待完善功能记录（已脱敏）
+
+说明：
+- 这个文件里的真实 Cookie、csrf、刷新令牌示例已全部移除。
+- 如果后续要记录接口调试数据，请只保留占位符，不要提交真实账号信息。
+
+安全示例：
+
+{
+  "cookie": "MUSIC_U=YOUR_NCM_MUSIC_U_COOKIE; MUSIC_R_U=YOUR_NCM_MUSIC_R_U_COOKIE; __csrf=YOUR_CSRF_TOKEN; os=pc"
+}
+
+发布前检查：
+- 根目录 `.env` 不要提交
+- `logs/` 和 `agent_app/tmp_backend_*.log` 不要提交
+- `Account_setting/cookie.json` 不要提交
