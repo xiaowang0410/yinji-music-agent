@@ -125,6 +125,7 @@ def _build_system_prompt() -> str:
         "7. 如果是多任务请求，rewritten_query 必须保留所有任务，不允许只保留其中一半。\n"
         "8. 如果上下文里有代词、省略、承接，结合上下文补全，但不要凭空改题。\n"
         "9. possible_missing_params 只在确实缺关键参数时才写，否则返回 []。\n"
+        "10. 输入里可能有 [PLAYER_STATE]，这只是播放器运行状态。用户问当前播放、暂停、继续、下一首时保留原意；用户要求播放新的点赞歌、歌单或情绪/场景音乐时，不要改写成控制当前播放器。\n"
         
         "针对非音乐相关问题你需要：\n"
         "1. 只做问题改写,把问题写的具体，代词之类的根据对话历史替换即可，按照示例格式输出JSON结构。\n"
@@ -224,12 +225,15 @@ def _build_system_prompt() -> str:
         "11.获取关注用户列表，调用get_follow_list工具。\n"
         "12.获取收藏的电台列表，调用dj_sublist工具。\n"
         "13.给某人发私信，调用send_text工具。\n"
+        "14.播放我点赞/喜欢/收藏的歌，改写为获取我点赞/喜欢/收藏的歌曲列表，调用liked_songs工具；前端播放器会自动播放结果。\n"
+        "15.播放某个歌单的歌，改写为搜索对应歌单，type=歌单；前端会打开歌单歌曲并自动播放。\n"
+        "16.播放开心、忧郁、伤感、治愈、睡前、学习、运动、通勤等情绪/场景音乐，改写为搜索对应情绪或场景的歌单，type=歌单；不要只闲聊。\n"
     )
 
 
 def get_intent_detection_agent():
     """获取查询改写 Agent。"""
-    llm = get_llm(model="qwen-plus")
+    llm = get_llm(model=None, task="intent")
     system_prompt = _build_system_prompt()
 
     def rewrite_prompt(user_input):

@@ -217,24 +217,35 @@ export const agentApi = {
   getPlaylistTracks: (playlistId, params = {}) =>
     runWithBackendRetry(() => api.get(`/agent/playlists/${playlistId}/tracks`, { params }), { waitUntilReady: true }),
 
+  getUserProfile: () =>
+    runWithBackendRetry(() => api.get('/agent/user/profile'), { waitUntilReady: true }),
+
   renameConversation: (conversationId, title) =>
     runWithBackendRetry(() => api.patch(`/agent/conversations/${conversationId}`, { title }), { waitUntilReady: true }),
 
   deleteConversation: (conversationId) =>
     runWithBackendRetry(() => api.delete(`/agent/conversations/${conversationId}`), { waitUntilReady: true }),
 
-  chat: (message, conversationId = null) =>
+  chat: (message, conversationId = null, clientContext = null) =>
     runWithBackendRetry(
-      () => api.post('/agent/chat', { message, conversation_id: conversationId }),
+      () => api.post('/agent/chat', {
+        message,
+        conversation_id: conversationId,
+        client_context: clientContext,
+      }),
       { waitUntilReady: true },
     ),
 
-  chatStream: async (message, conversationId = null, { onEvent, signal } = {}) => {
+  chatStream: async (message, conversationId = null, { onEvent, signal, clientContext = null } = {}) => {
     return runWithBackendRetry(async () => {
       const response = await fetch(`${resolveBaseURL()}/agent/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, conversation_id: conversationId }),
+        body: JSON.stringify({
+          message,
+          conversation_id: conversationId,
+          client_context: clientContext,
+        }),
         signal,
       })
 
@@ -256,6 +267,7 @@ export const agentApi = {
         conversation: null,
         memory_summary: '',
         message: null,
+        metrics: null,
       }
 
       const separatorIndex = (text) => {
@@ -305,11 +317,15 @@ export const agentApi = {
           if (event === 'memory' && typeof data.memory_summary === 'string') {
             finalState.memory_summary = data.memory_summary
           }
+          if (event === 'metrics' && data.metrics) {
+            finalState.metrics = data.metrics
+          }
           if (event === 'message_commit' && data.message) {
             finalState.message = data.message
           }
           if (event === 'done') {
             finalState.success = !!data.success
+            if (data.metrics) finalState.metrics = data.metrics
           }
           if (event === 'error') {
             throw new Error(data.message || 'stream_error')

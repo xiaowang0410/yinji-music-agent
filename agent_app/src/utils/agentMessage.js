@@ -4,6 +4,7 @@ const INTERNAL_FAILURE_MARKERS = [
   'failed to register environment variables',
   'error during request setup',
   'anonymous registration',
+  'reasoning_content',
   'not a function',
   'song_play_temporarily_unavailable',
   'song_lyrics_temporarily_unavailable',

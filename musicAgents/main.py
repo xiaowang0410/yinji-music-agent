@@ -16,12 +16,16 @@ if _REPO_ROOT not in sys.path:
 from musicAgents.core.logging_utils import setup_logging
 from musicAgents.intent_detection.agent import get_intent_detection_agent
 from musicAgents.output_check.agent import (
+    extract_client_action,
     extract_rich_content,
     format_structured_output,
     polish_with_guard,
     polish_with_guard_stream,
     should_polish_response,
 )
+from musicAgents.output_check.reflection import reflect_on_tool_result
+from musicAgents.core.settings import get_llm_settings
+from musicAgents.core.tracing import AgentRunTracker
 from musicAgents.tool_execution.agent import get_tool_execution_agent
 
 logger = logging.getLogger("musicAgents.main")
@@ -64,6 +68,7 @@ _INTERNAL_ERROR_MARKERS = (
     "failed to register environment variables",
     "error during request setup",
     "anonymous registration",
+    "reasoning_content",
     "not a function",
     "resolve_song_",
     "nativecommanderror",
@@ -420,7 +425,7 @@ def _assistant_intro_shortcut_reply(text: str) -> str | None:
 def run_three_layer_agent(
     user_input: str,
     *,
-    polish_model: str = "qwen-plus",
+    polish_model: str | None = None,
     event_cb: Optional[Callable[[dict], None]] = None,
     token_cb: Optional[Callable[[str], None]] = None,
 ) -> str:
@@ -428,16 +433,23 @@ def run_three_layer_agent(
     _configure_console_io()
     current_q = _extract_current_user_question(user_input)
 
+    settings = get_llm_settings()
+    if polish_model is None:
+        polish_model = settings.model_for_task("polish")
+    tracker = AgentRunTracker(event_cb=event_cb)
+
     def emit(event: str, **payload: Any) -> None:
-        if event_cb is None:
-            return
-        try:
-            event_cb({"event": event, **payload})
-        except Exception:
-            pass
+        tracker.emit(event, **payload)
 
     logger.info("用户输入: %s", current_q or user_input)
     start_time = time.time()
+    emit(
+        "run_started",
+        provider=settings.resolved_provider,
+        intent_model=settings.model_for_task("intent"),
+        tool_model=settings.model_for_task("tool"),
+        polish_model=polish_model,
+    )
 
     shortcut_reply = _assistant_intro_shortcut_reply(current_q or user_input)
     if shortcut_reply:
@@ -465,10 +477,11 @@ def run_three_layer_agent(
 
         duration = time.time() - start_time
         logger.info("总耗时: %.2fs", duration)
-        emit("done", success=True)
+        emit("done", success=True, elapsed_ms=tracker.elapsed_ms())
         return full_content
 
     emit("stage", stage="intent_detection")
+    tracker.thought("我先理解问题、补全上下文，再决定是否需要工具。", kind="plan")
     try:
         intent_result = _intent_agent()(user_input)
     except Exception as exc:
@@ -477,6 +490,7 @@ def run_three_layer_agent(
         safe_print(f"\n[最终回答]: {message}")
         emit("done", success=False, error=str(exc))
         return message
+    tracker.stage_done("intent_detection", label="意图识别完成")
 
     rewritten_query = str(intent_result.get("rewritten_query") or current_q or user_input).strip()
     plan = _normalize_plan(intent_result.get("plan"))
@@ -493,6 +507,7 @@ def run_three_layer_agent(
     )
 
     emit("stage", stage="tool_execution")
+    tracker.thought("我会优先调用明确匹配的音乐工具，必要时再检索更多工具。", kind="plan")
     try:
         tool_result = _tool_executor()(
             user_input=user_input,
@@ -508,6 +523,17 @@ def run_three_layer_agent(
         safe_print(f"\n[最终回答]: {message}")
         emit("done", success=False, error=str(exc))
         return message
+    tracker.stage_done("tool_execution", label="工具执行完成")
+
+    reflection = reflect_on_tool_result(tool_result, question=current_q or user_input)
+    if reflection:
+        emit("reflection", **reflection)
+        tracker.thought(
+            str(reflection.get("summary") or ""),
+            kind="reflection",
+            confidence=reflection.get("confidence"),
+            need_retry=reflection.get("need_retry"),
+        )
 
     executed_tool_names = [
         str(item.get("tool_name") or "").strip()
@@ -520,6 +546,10 @@ def run_three_layer_agent(
     final_tool_name = _final_tool_name(tool_result)
     if final_tool_name:
         logger.info("最终工具: %s", final_tool_name)
+
+    client_action = extract_client_action(tool_result)
+    if client_action:
+        emit("client_action", payload=client_action)
 
     rich_content = extract_rich_content(tool_result)
     if rich_content:
@@ -535,6 +565,7 @@ def run_three_layer_agent(
         cleaned_raw = _sanitize_internal_failure_text(tool_result, cleaned_raw)
     use_polish = should_polish_response(cleaned_raw, tool_result)
     emit("polish", use_polish=bool(use_polish))
+    tracker.stage_done("output_polish_decide", label="输出策略确定", use_polish=bool(use_polish))
 
     safe_print("\n[最终回答]: ", end="", flush=True)
 
@@ -581,7 +612,7 @@ def run_three_layer_agent(
 
     duration = time.time() - start_time
     logger.info("总耗时: %.2fs", duration)
-    emit("done", success=True)
+    emit("done", success=True, elapsed_ms=tracker.elapsed_ms())
     return full_content
 
 

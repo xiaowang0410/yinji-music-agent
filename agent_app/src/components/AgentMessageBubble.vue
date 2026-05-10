@@ -205,6 +205,17 @@
         </section>
       </div>
     </div>
+    <div v-if="isUserMessage" class="msg-avatar" aria-hidden="true">
+      <img
+        v-if="userAvatarUrl"
+        class="msg-avatar-image"
+        :src="userAvatarUrl"
+        :alt="userDisplayName"
+        loading="lazy"
+        @error="avatarLoadFailed = true"
+      />
+      <span v-else class="msg-avatar-initial">{{ userInitial }}</span>
+    </div>
   </div>
 </template>
 
@@ -253,6 +264,10 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  userProfile: {
+    type: Object,
+    default: null,
+  },
 })
 
 const emit = defineEmits(['play-song'])
@@ -265,7 +280,17 @@ const playlistListPayload = computed(() => getPlaylistListPayload(props.message)
 const playlistLoadingId = ref('')
 const playlistDetail = ref(null)
 const playlistRequestError = ref('')
+const avatarLoadFailed = ref(false)
 const playlistDetailSongs = computed(() => Array.isArray(playlistDetail.value?.songs) ? playlistDetail.value.songs : [])
+const userAvatarUrl = computed(() => {
+  if (avatarLoadFailed.value) return ''
+  return String(props.userProfile?.avatar_url || props.userProfile?.avatarUrl || '').trim()
+})
+const userDisplayName = computed(() => String(props.userProfile?.nickname || props.userProfile?.name || '').trim())
+const userInitial = computed(() => {
+  const name = userDisplayName.value
+  return name ? name.slice(0, 1).toUpperCase() : '我'
+})
 const playlistDetailSummary = computed(() => {
   const playlist = playlistDetail.value?.playlist
   if (!playlist || typeof playlist !== 'object') return ''
@@ -384,6 +409,8 @@ function closePlaylistDetail() {
 <style scoped>
 .msg-row {
   display: flex;
+  align-items: flex-start;
+  gap: 10px;
   margin: 10px 0;
   width: 100%;
   min-width: 0;
@@ -391,6 +418,30 @@ function closePlaylistDetail() {
 
 .msg-row.user {
   justify-content: flex-end;
+}
+
+.msg-avatar {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border-radius: 14px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.9), transparent 46%),
+    linear-gradient(135deg, rgba(245, 245, 244, 0.96), rgba(216, 216, 214, 0.82));
+  color: #303330;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 10px 20px rgba(24, 28, 24, 0.1);
+}
+
+.msg-avatar-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .msg-bubble {
@@ -416,8 +467,8 @@ function closePlaylistDetail() {
   min-width: 0;
   padding: 11px 14px;
   border-color: rgba(255, 255, 255, 0.54);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(230, 241, 246, 0.24));
-  box-shadow: 0 14px 30px rgba(109, 137, 158, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(246, 246, 245, 0.34));
+  box-shadow: 0 14px 30px rgba(24, 28, 24, 0.08);
   position: relative;
   overflow: hidden;
 }
@@ -426,7 +477,7 @@ function closePlaylistDetail() {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent 0%, rgba(74, 114, 158, 0.06) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(32, 36, 32, 0.045) 50%, transparent 100%);
   transform: translateX(-100%);
   animation: thinking-sheen 1.8s ease-in-out infinite;
   pointer-events: none;
@@ -434,9 +485,9 @@ function closePlaylistDetail() {
 
 .msg-row.user .msg-bubble {
   margin-left: auto;
-  background: linear-gradient(180deg, rgba(201, 226, 236, 0.38), rgba(216, 232, 238, 0.24));
+  background: linear-gradient(180deg, rgba(250, 250, 249, 0.82), rgba(244, 244, 243, 0.62));
   border-color: rgba(255, 255, 255, 0.58);
-  box-shadow: 0 14px 28px rgba(109, 137, 158, 0.13);
+  box-shadow: 0 14px 28px rgba(24, 28, 24, 0.08);
   -webkit-user-select: text;
   user-select: text;
 }
@@ -461,6 +512,18 @@ function closePlaylistDetail() {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.msg-bubble.has-rich-content .msg-text {
+  order: 20;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+.msg-bubble.has-rich-content .rich-list-card {
+  order: 1;
 }
 
 .msg-text :deep(> * + *) {
@@ -498,7 +561,7 @@ function closePlaylistDetail() {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: rgba(74, 114, 158, 0.55);
+  background: rgba(32, 36, 32, 0.42);
 }
 
 .msg-text :deep(.msg-kv-list) {
@@ -531,7 +594,7 @@ function closePlaylistDetail() {
 }
 
 .msg-text :deep(.msg-link) {
-  color: #4a7598;
+  color: #303330;
   text-decoration: underline;
   word-break: break-all;
 }
@@ -542,12 +605,12 @@ function closePlaylistDetail() {
   padding: 14px;
   border-radius: 22px;
   border: 1px solid rgba(255, 255, 255, 0.42);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(241, 248, 251, 0.2));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(247, 247, 246, 0.28));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .rich-list-card--playlists {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(235, 244, 248, 0.24));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(246, 246, 245, 0.32));
 }
 
 .rich-list-head {
@@ -577,7 +640,7 @@ function closePlaylistDetail() {
   flex: 0 0 auto;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(74, 114, 158, 0.1);
+  background: rgba(32, 36, 32, 0.06);
   color: var(--active-color);
   font-size: 12px;
   font-weight: 700;
@@ -646,9 +709,9 @@ function closePlaylistDetail() {
 }
 
 .song-row.is-active {
-  background: linear-gradient(135deg, rgba(88, 121, 149, 0.18), rgba(255, 255, 255, 0.26));
-  border-color: rgba(102, 138, 166, 0.28);
-  box-shadow: 0 12px 24px rgba(98, 127, 145, 0.14);
+  background: linear-gradient(135deg, rgba(32, 36, 32, 0.08), rgba(255, 255, 255, 0.34));
+  border-color: rgba(32, 36, 32, 0.16);
+  box-shadow: 0 12px 24px rgba(24, 28, 24, 0.08);
 }
 
 .song-row.is-loading {
@@ -659,7 +722,7 @@ function closePlaylistDetail() {
 .playlist-rank {
   font-size: 18px;
   font-weight: 700;
-  color: rgba(74, 114, 158, 0.72);
+  color: rgba(64, 68, 64, 0.72);
   text-align: center;
 }
 
@@ -669,7 +732,7 @@ function closePlaylistDetail() {
   height: 56px;
   border-radius: 16px;
   object-fit: cover;
-  box-shadow: 0 10px 18px rgba(74, 114, 158, 0.18);
+  box-shadow: 0 10px 18px rgba(24, 28, 24, 0.12);
 }
 
 .song-cover.placeholder,
@@ -677,7 +740,7 @@ function closePlaylistDetail() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(101, 129, 149, 0.44), rgba(183, 206, 220, 0.3));
+  background: linear-gradient(135deg, rgba(96, 100, 96, 0.36), rgba(220, 220, 218, 0.46));
   color: #fff;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -761,7 +824,7 @@ function closePlaylistDetail() {
   height: 30px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.42);
-  color: rgba(70, 103, 130, 0.88);
+  color: rgba(64, 68, 64, 0.88);
   font-size: 12px;
   font-weight: 700;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
@@ -774,7 +837,7 @@ function closePlaylistDetail() {
   justify-content: center;
   border: 1px solid rgba(255, 255, 255, 0.46);
   background: rgba(255, 255, 255, 0.34);
-  color: rgba(70, 103, 130, 0.92);
+  color: rgba(64, 68, 64, 0.92);
   font-size: 12px;
   font-weight: 700;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
@@ -880,7 +943,7 @@ function closePlaylistDetail() {
   width: 3px;
   height: 3px;
   border-radius: 999px;
-  background: rgba(128, 151, 167, 0.42);
+  background: rgba(128, 128, 124, 0.36);
   animation: thinking-dot-fade 1.15s infinite ease-in-out both;
 }
 

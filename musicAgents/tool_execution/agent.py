@@ -6,16 +6,18 @@ import subprocess
 import sys
 import time
 from typing import Any
+from uuid import uuid4
 
 from tools.MusicTools.musicTools import liked_songs, send_text, user_detail, user_level, get_song_id, \
     song_download_url_v1, recommend_resource, personalized, personalized_newsong, user_playlist, get_mutual_follow_list, \
     toplist, top_song, search, song_details, song_lyrics, song_like, recommend_songs, follow, get_follow_list, \
-    dj_sublist, playlist_create
+    dj_sublist, playlist_create, search_song_candidates, search_scene_songs
 
 # Add repository root to Python path for direct execution.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from musicAgents.core.utils import get_llm
+from musicAgents.intent_routing import route_player_intent
 
 logger = logging.getLogger("musicAgents.tool_execution")
 
@@ -42,7 +44,8 @@ SYSTEM_PROMPT = (
     "4. 如果后续工具需要 id，而当前只有歌手名、专辑名、歌单名、用户名，就必须先解析出或者去检索工具获取真实 id，再调用下游工具；不要把名称直接塞进 id 参数。\n"
     "5. 如果出现多个候选实体，优先选择名称与用户请求最匹配的那个；不确定时继续查，不要乱试多个不相干 id 后直接收尾。\n"
     "6.retrived_music_tool工具是兜底，如果已经解决问题了，就不需要调用这个工具了，只有当上面的工具不能满足需求时才调用。\n"
-    "7. 输入里可能包含完整会话历史、ASSISTANT_PAYLOAD 和 [ACTIVE_ENTITIES]，要利用这些上下文理解指代、省略和承接。\n"
+    "7. 输入里可能包含完整会话历史、ASSISTANT_PAYLOAD、[ACTIVE_ENTITIES] 和 [PLAYER_STATE]，要利用这些上下文理解指代、省略和承接。\n"
+    "8. [PLAYER_STATE] 是前端播放器运行状态，只能辅助回答当前播放、队列、播放状态等问题；不要把它当成用户问题，也不要在回复里暴露这个字段。\n"
     "\n"
 
     "以下是四个容易混淆的工具：你要注意这几个，不要搞混了，用户问哪个就返回哪个工具的结果。\n"
@@ -68,6 +71,12 @@ SYSTEM_PROMPT = (
     "11.获取关注用户列表，调用get_follow_list工具。\n"
     "12.获取收藏的电台列表，调用dj_sublist工具。\n"
     "13.给某人发私信，调用send_text工具。\n"
+    "14.播放我点赞/喜欢/收藏的歌，调用liked_songs工具返回歌曲列表；前端会自动播放结果，不需要你生成播放控制代码。\n"
+    "15.播放某个歌单的歌，调用search工具搜索歌单，type=1000；前端会根据歌单列表自动加载歌曲并播放。\n"
+    "16.播放开心、忧郁、伤感、治愈、睡前、学习、运动、通勤等情绪/场景音乐，优先调用search工具搜索对应情绪/场景歌单，type=1000；如果用户明确要歌曲，再搜索歌曲 type=1。\n"
+    "17.如果用户要控制播放器或让你直接播放内容，优先调用 player_ 开头的播放器工具，不要只返回文字说明。\n"
+    "18.播放指定歌曲，调用 player_play_song_search 搜索歌曲列表并让前端自动播放。\n"
+    "19.播放下雨天、夜晚、开心、忧郁、学习等场景/情绪音乐，调用 player_play_mood 返回歌曲列表并自动播放。\n"
 
 
 )
@@ -89,6 +98,33 @@ TRANSIENT_LLM_ERROR_MARKERS = (
     "504 gateway timeout",
 )
 _NON_FINAL_TOOL_NAMES = {"retrived_music_tool"}
+_SINGLE_STEP_FINAL_TOOLS = {
+    "player_current_track",
+    "player_pause",
+    "player_resume",
+    "player_next_track",
+    "player_previous_track",
+    "player_play_song_list",
+    "player_play_song_search",
+    "player_play_playlist_tracks",
+    "player_play_liked_songs",
+    "player_play_recommended_songs",
+    "player_play_playlist",
+    "player_play_mood",
+    "liked_songs",
+    "recommend_songs",
+    "recommend_resource",
+    "personalized",
+    "personalized_newsong",
+    "search_song_candidates",
+    "search_scene_songs",
+    "toplist",
+    "top_song",
+    "user_playlist",
+    "get_mutual_follow_list",
+    "get_follow_list",
+    "dj_sublist",
+}
 _ID_LIKE_ARG_KEYS = {"id", "song_id", "songId", "album_id", "playlist_id", "user_id", "artist_id", "uid"}
 
 
@@ -178,6 +214,61 @@ def _safe_dumps(obj: Any) -> str:
         return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
     except Exception:
         return str(obj)
+
+
+def _extract_json_marker(text: str, marker: str) -> dict[str, Any]:
+    if not isinstance(text, str) or marker not in text:
+        return {}
+    pattern = re.compile(rf"{re.escape(marker)}\s*(\{{[^\n]*\}})")
+    match = pattern.search(text)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _extract_player_context(text: str) -> dict[str, Any]:
+    data = _extract_json_marker(text, "[PLAYER_STATE]")
+    player = data.get("player") if isinstance(data.get("player"), dict) else data
+    return player if isinstance(player, dict) else {}
+
+
+def _format_player_time(seconds: Any) -> str:
+    try:
+        total = max(0, int(float(seconds)))
+    except (TypeError, ValueError):
+        total = 0
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _current_track_message(player: dict[str, Any]) -> str:
+    if not bool(player.get("has_active_track")):
+        return "现在还没有正在播放的歌曲。"
+
+    track = player.get("current_track") if isinstance(player.get("current_track"), dict) else {}
+    name = str(track.get("name") or "未知歌曲").strip()
+    artist = str(track.get("artist") or "").strip()
+    album = str(track.get("album") or "").strip()
+    status = "正在播放" if bool(player.get("is_playing")) else "已暂停"
+
+    parts = [f"当前播放：{name}"]
+    if artist:
+        parts.append(f"歌手：{artist}")
+    if album:
+        parts.append(f"专辑：{album}")
+    parts.append(f"状态：{status}")
+
+    duration = player.get("duration_seconds") or 0
+    try:
+        has_duration = float(duration) > 0
+    except (TypeError, ValueError):
+        has_duration = False
+    if has_duration:
+        parts.append(f"进度：{_format_player_time(player.get('current_time_seconds'))} / {_format_player_time(duration)}")
+    return "\n".join(parts)
 
 
 def _tool_id(tool: Any) -> str:
@@ -360,18 +451,245 @@ def _looks_like_transient_llm_error(exc: Any) -> bool:
     return any(marker in text for marker in TRANSIENT_LLM_ERROR_MARKERS)
 
 
+def _client_action_type(action: str) -> str:
+    mapping = {
+        "answer_current_track": "player.current_track",
+        "pause": "player.pause",
+        "resume": "player.resume",
+        "next_track": "player.next_track",
+    "previous_track": "player.previous_track",
+    "play_song_list": "player.play_song_list",
+    "play_song_search": "player.play_song_list",
+    "play_playlist_tracks": "player.play_playlist_tracks",
+    }
+    return mapping.get(str(action or "").strip(), str(action or "").strip())
+
+
+def make_client_action(
+    action: str,
+    message: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    success: bool = True,
+    status: str = "ready",
+) -> dict[str, Any]:
+    action_payload = {
+        "action": action,
+        "payload": payload or {},
+    }
+    return {
+        "kind": "client_action",
+        "version": "1.0",
+        "id": f"client_action_{uuid4().hex}",
+        "type": _client_action_type(action),
+        "status": status,
+        "success": bool(success),
+        "message": message,
+        "payload": payload or {},
+        "requires_confirmation": False,
+        "error": None if success else str(message or "client_action_failed"),
+        # Backward compatibility for the current frontend adapter.
+        "action": action_payload,
+    }
+
+
+def make_player_tool_result(
+    *,
+    message: str,
+    content: Any,
+    rich_content_source: str,
+    action: str,
+    payload: dict[str, Any] | None = None,
+    success: bool = True,
+) -> dict[str, Any]:
+    client_action = make_client_action(action, message, payload=payload, success=success)
+    return {
+        "kind": "player_tool_result",
+        "success": bool(success),
+        "message": message,
+        "content": content,
+        "rich_content_source": rich_content_source,
+        "client_action": client_action,
+        # Backward compatibility for output_check.extract_client_action.
+        "action": client_action.get("action"),
+    }
+
+
+def _tool_result_song_count(value: Any) -> int:
+    if not isinstance(value, dict):
+        return 0
+    songs = value.get("songs")
+    return len(songs) if isinstance(songs, list) else 0
+
+
 def get_tool_execution_agent():
     """Return the tool execution callable."""
-    llm = get_llm(model="qwen-max")
+    llm = get_llm(model=None, task="tool")
 
+    from langchain_core.tools import tool
     from RagService.ToolRag.text_to_tools import getTools
     from RagService.ragService import retrived_music_tool
 
+    runtime_context: dict[str, Any] = {
+        "player": {},
+    }
+
+    def player_action_result(
+        action: str,
+        message: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        success: bool = True,
+    ) -> dict[str, Any]:
+        return make_client_action(action, message, payload=payload, success=success)
+
+    @tool(description="播放器工具：查询前端播放器当前正在播放的歌曲、歌手、专辑、播放状态和进度。")
+    def player_current_track() -> dict[str, Any]:
+        player = runtime_context.get("player") if isinstance(runtime_context.get("player"), dict) else {}
+        return player_action_result("answer_current_track", _current_track_message(player))
+
+    @tool(description="播放器工具：暂停当前播放。只有用户明确要求暂停、停一下、停止播放时调用。")
+    def player_pause() -> dict[str, Any]:
+        return player_action_result("pause", "已暂停播放。")
+
+    @tool(description="播放器工具：继续或恢复当前歌曲播放。只有用户明确要求继续播放、恢复播放时调用。")
+    def player_resume() -> dict[str, Any]:
+        return player_action_result("resume", "已继续播放。")
+
+    @tool(description="播放器工具：切到下一首。只有用户明确要求下一首、切歌、换一首时调用。")
+    def player_next_track() -> dict[str, Any]:
+        return player_action_result("next_track", "已切到下一首。")
+
+    @tool(description="播放器工具：切回上一首。只有用户明确要求上一首、前一首时调用。")
+    def player_previous_track() -> dict[str, Any]:
+        return player_action_result("previous_track", "已切回上一首。")
+
+    @tool(description="播放器工具：播放工具返回的歌曲列表。参数 source 用于说明来源，比如 liked_songs、recommend_songs、search。")
+    def player_play_song_list(source: str = "tool_result", rank: int = 1) -> dict[str, Any]:
+        safe_rank = max(1, int(rank or 1))
+        return player_action_result(
+            "play_song_list",
+            "已准备播放歌曲列表。",
+            payload={"source": str(source or "tool_result"), "rank": safe_rank},
+        )
+
+    @tool(description="播放器工具：搜索指定歌曲并播放。用户说播放某首歌、想听某首歌、来首某歌时调用，返回歌曲列表卡片并自动播放。")
+    def player_play_song_search(keywords: str = "", rank: int = 1) -> dict[str, Any]:
+        query = str(keywords or "").strip() or "推荐歌曲"
+        safe_rank = max(1, int(rank or 1))
+        result = _run_isolated_music_tool("search_song_candidates", {"keywords": query, "limit": 10})
+        song_count = _tool_result_song_count(result)
+        if song_count <= 0:
+            message = f"我暂时没有找到「{query}」相关的可播放歌曲。"
+            if isinstance(result, dict) and result.get("error"):
+                message = f"{message}{result.get('error')}"
+            return {
+                "kind": "player_tool_result",
+                "success": False,
+                "message": message,
+                "content": result,
+                "rich_content_source": "search_song_candidates",
+            }
+        return make_player_tool_result(
+            message=f"我找到了「{query}」相关的 {song_count} 首歌曲，马上开始播放。",
+            content=result,
+            rich_content_source="search_song_candidates",
+            action="play_song_list",
+            payload={"source": "search_song_candidates", "rank": safe_rank, "keyword": query},
+        )
+
+    @tool(description="播放器工具：播放工具返回的歌单列表里的某个歌单。参数 rank 表示第几个歌单，从 1 开始。")
+    def player_play_playlist_tracks(source: str = "tool_result", rank: int = 1, playlist_name: str = "") -> dict[str, Any]:
+        safe_rank = max(1, int(rank or 1))
+        return player_action_result(
+            "play_playlist_tracks",
+            "已准备播放歌单歌曲。",
+            payload={
+                "source": str(source or "tool_result"),
+                "rank": safe_rank,
+                "playlist_name": str(playlist_name or "").strip(),
+            },
+        )
+
+    @tool(description="播放器工具：播放我的点赞/喜欢/收藏歌曲。此工具会获取点赞歌曲并要求前端播放器自动播放。")
+    def player_play_liked_songs() -> dict[str, Any]:
+        result = _run_isolated_music_tool("liked_songs", {})
+        return make_player_tool_result(
+            message="已找到你喜欢的歌曲，马上开始播放。",
+            content=result,
+            rich_content_source="liked_songs",
+            action="play_song_list",
+            payload={"source": "liked_songs", "rank": 1},
+        )
+
+    @tool(description="播放器工具：播放每日推荐歌曲。此工具会获取每日推荐歌曲并要求前端播放器自动播放。")
+    def player_play_recommended_songs() -> dict[str, Any]:
+        result = _run_isolated_music_tool("recommend_songs", {})
+        return make_player_tool_result(
+            message="已找到今日推荐歌曲，马上开始播放。",
+            content=result,
+            rich_content_source="recommend_songs",
+            action="play_song_list",
+            payload={"source": "recommend_songs", "rank": 1},
+        )
+
+    @tool(description="播放器工具：播放某个歌单里的歌曲。参数 keywords 是歌单关键词；rank 是搜索结果中的第几个歌单。")
+    def player_play_playlist(keywords: str = "", rank: int = 1) -> dict[str, Any]:
+        query = str(keywords or "").strip() or "推荐歌单"
+        safe_rank = max(1, int(rank or 1))
+        result = _run_isolated_music_tool("search", {"keywords": query, "type": 1000, "limit": 10})
+        return make_player_tool_result(
+            message="已找到相关歌单，马上开始播放。",
+            content=result,
+            rich_content_source="search",
+            action="play_playlist_tracks",
+            payload={"source": "search", "rank": safe_rank, "playlist_name": query},
+        )
+
+    @tool(description="播放器工具：按情绪或场景播放音乐。参数 mood 可为开心、忧郁、伤感、治愈、睡前、学习、运动、通勤、下雨天等。返回歌曲列表卡片并自动播放。")
+    def player_play_mood(mood: str = "", rank: int = 1) -> dict[str, Any]:
+        keyword = str(mood or "").strip() or "推荐"
+        safe_rank = max(1, int(rank or 1))
+        result = _run_isolated_music_tool("search_scene_songs", {"scene": keyword, "rank": safe_rank, "limit": 12})
+        song_count = _tool_result_song_count(result)
+        if song_count <= 0:
+            message = f"我暂时没有找到适合「{keyword}」的可播放歌曲。"
+            if isinstance(result, dict) and result.get("error"):
+                message = f"{message}{result.get('error')}"
+            return {
+                "kind": "player_tool_result",
+                "success": False,
+                "message": message,
+                "content": result,
+                "rich_content_source": "search_scene_songs",
+            }
+        return make_player_tool_result(
+            message=f"已找到适合「{keyword}」的 {song_count} 首歌曲，马上开始播放。",
+            content=result,
+            rich_content_source="search_scene_songs",
+            action="play_song_list",
+            payload={"source": "search_scene_songs", "rank": safe_rank, "keyword": keyword},
+        )
+
     base_tools = [
+        player_current_track,
+        player_pause,
+        player_resume,
+        player_next_track,
+        player_previous_track,
+        player_play_song_list,
+        player_play_song_search,
+        player_play_playlist_tracks,
+        player_play_liked_songs,
+        player_play_recommended_songs,
+        player_play_playlist,
+        player_play_mood,
 
         user_detail,
         user_level,
         search,
+        search_song_candidates,
+        search_scene_songs,
         get_song_id,
         song_details,
         song_lyrics,
@@ -415,6 +733,15 @@ def get_tool_execution_agent():
                 event_cb({"event": event, **payload})
             except Exception:
                 pass
+
+        def direct_tool_result(tool_name: str, tool_args: dict[str, Any]):
+            _, result, success, _ = run_tool(base_tools, tool_name, tool_args)
+            if success:
+                return {
+                    "final": {"tool_name": tool_name, "args": tool_args, "result": result},
+                    "tool_results": tool_results,
+                }
+            return {"error": f"{tool_name}_failed", "tool_results": tool_results}
 
         def ensure_loaded(tool_names: list[str], available_tools: list[Any], loaded_names: set[str]) -> None:
             pending = [name for name in tool_names if str(name or "").strip() and str(name).strip() not in loaded_names]
@@ -477,6 +804,18 @@ def get_tool_execution_agent():
             full_context = str(user_input or "").strip()
             current_q = _current_question(user_input)
             prompt_input = current_q or full_context
+            runtime_context["player"] = _extract_player_context(full_context)
+            player_intent = route_player_intent(current_q or prompt_input, rewritten_query)
+            if player_intent:
+                shortcut = player_intent.as_shortcut()
+                logger.info(
+                    "播放器意图快捷路由: %s | confidence=%.2f | reason=%s",
+                    player_intent.intent_type,
+                    player_intent.confidence,
+                    player_intent.reason,
+                )
+                return direct_tool_result(shortcut["tool_name"], shortcut.get("args") or {})
+
             normalized_plan = [str(item).strip() for item in (plan or []) if str(item or "").strip()]
             normalized_extracted_params = dict(extracted_params or {})
             normalized_missing_params = [str(item).strip() for item in (possible_missing_params or []) if str(item or "").strip()]
@@ -604,6 +943,8 @@ def get_tool_execution_agent():
 
                     if success and tool_name not in _NON_FINAL_TOOL_NAMES:
                         last_successful = {"tool_name": tool_name, "args": tool_args, "result": result}
+                        if tool_name in _SINGLE_STEP_FINAL_TOOLS:
+                            return {"final": last_successful, "tool_results": tool_results}
 
                     messages.append(ToolMessage(content=result_text, name=tool_name, tool_call_id=tool_call["id"]))
 

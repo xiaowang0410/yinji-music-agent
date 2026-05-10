@@ -13,12 +13,12 @@
 
 <style scoped>
 .app-root {
-  width: var(--desktop-canvas-width);
-  min-width: var(--desktop-canvas-width);
-  max-width: var(--desktop-canvas-width);
-  height: var(--desktop-canvas-height);
-  min-height: var(--desktop-canvas-height);
-  max-height: var(--desktop-canvas-height);
+  width: 100vw;
+  min-width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
   position: relative;
   isolation: isolate;
   overflow: hidden;

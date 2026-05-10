@@ -108,6 +108,20 @@ flowchart LR
 - `agent_app/src/components`
 - `agent_app/src/services`
 
+## 效果展示
+
+### 音乐助手主界面
+
+侧边栏、最近对话、音乐推荐卡片、结构化歌曲列表和底部播放器被整合在同一个工作台里。用户可以直接通过自然语言让 Agent 搜歌、生成推荐、播放列表或查看收藏音乐。
+
+![音迹音乐助手主界面](docs/images/yinji-chat-music-assistant.png)
+
+### 全屏沉浸式播放器
+
+点击播放器封面后进入全屏音乐模式，展示大封面、黑胶视觉、播放控制、音量控制和歌词滚动，让聊天式音乐助手也具备完整的听歌体验。
+
+![音迹全屏沉浸式播放器](docs/images/yinji-fullscreen-player.png)
+
 ## 技术栈
 
 ### 前端
@@ -278,11 +292,11 @@ npm run start
 - 补一个统一的根目录 Python 依赖文件
 - 进一步清理少量历史编码和注释问题
 - 增加更系统的测试，尤其是工具链路和播放器链路
-- 补充 Demo 视频、截图和在线演示说明
+- 补充 Demo 视频和在线演示说明
 
 ## Demo
 
-- GitHub: 待补充仓库链接
+- GitHub: https://github.com/xiaowang0410/yinji-music-agent
 - Bilibili: 待补充演示视频链接
 
 ---

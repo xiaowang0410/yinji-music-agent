@@ -5,6 +5,7 @@ import re
 import requests
 import sys
 import threading
+import time
 from queue import Empty
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -59,6 +60,7 @@ STAGE_META_BY_KEY = {item["key"]: item for item in STAGE_CATALOG}
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
+    client_context: Optional[Dict[str, Any]] = None
 
 
 class CreateConversationRequest(BaseModel):
@@ -207,7 +209,64 @@ def _build_active_entities(history: List[dict]) -> dict:
     return active_entities
 
 
-def _build_agent_input(memory_summary: str, history: List[dict], user_message: str) -> str:
+def _compact_client_context(client_context: Optional[dict]) -> Optional[dict]:
+    if not isinstance(client_context, dict):
+        return None
+
+    player = client_context.get("player")
+    if not isinstance(player, dict):
+        player = client_context
+
+    current_track = player.get("current_track")
+    normalized_track = None
+    if isinstance(current_track, dict):
+        normalized_track = {
+            "id": str(current_track.get("id") or "").strip(),
+            "name": str(current_track.get("name") or "").strip(),
+            "artist": str(current_track.get("artist") or "").strip(),
+            "album": str(current_track.get("album") or "").strip(),
+        }
+
+    queue = player.get("queue")
+    normalized_queue = []
+    if isinstance(queue, list):
+        for item in queue[:20]:
+            if not isinstance(item, dict):
+                continue
+            normalized_queue.append(
+                {
+                    "id": str(item.get("id") or "").strip(),
+                    "name": str(item.get("name") or "").strip(),
+                    "artist": str(item.get("artist") or "").strip(),
+                }
+            )
+
+    compact = {
+        "player": {
+            "has_active_track": bool(player.get("has_active_track")),
+            "is_playing": bool(player.get("is_playing")),
+            "status_text": str(player.get("status_text") or "").strip(),
+            "current_time_seconds": player.get("current_time_seconds") or 0,
+            "duration_seconds": player.get("duration_seconds") or 0,
+            "current_track": normalized_track,
+            "queue_size": player.get("queue_size") or len(normalized_queue),
+            "queue": normalized_queue,
+        }
+    }
+
+    capabilities = client_context.get("capabilities")
+    if isinstance(capabilities, list):
+        compact["capabilities"] = [str(item).strip() for item in capabilities[:20] if str(item or "").strip()]
+
+    return compact
+
+
+def _build_agent_input(
+    memory_summary: str,
+    history: List[dict],
+    user_message: str,
+    client_context: Optional[dict] = None,
+) -> str:
     parts: List[str] = []
     memory = (memory_summary or "").strip()
     if memory:
@@ -231,6 +290,13 @@ def _build_agent_input(memory_summary: str, history: List[dict], user_message: s
             + json.dumps(active_entities, ensure_ascii=False, separators=(",", ":"))
         )
         parts.append("")
+    compact_context = _compact_client_context(client_context)
+    if compact_context:
+        parts.append(
+            "[PLAYER_STATE] "
+            + json.dumps(compact_context, ensure_ascii=False, separators=(",", ":"))
+        )
+        parts.append("")
     parts.extend(["【当前用户问题】", user_message])
     return "\n".join(parts).strip()
 
@@ -238,7 +304,7 @@ def _build_agent_input(memory_summary: str, history: List[dict], user_message: s
 def _update_memory_summary(prev_summary: str, last_user: str, last_assistant: str) -> str:
     from musicAgents.core.utils import get_llm
 
-    llm = get_llm(model="qwen-plus")
+    llm = get_llm(model=None, task="polish")
     prompt = (
         "你是对话记忆整理助手。请把对话中对后续有用的长期信息整理成一段简短纯文本摘要。\n"
         "要求：\n"
@@ -460,6 +526,54 @@ def _serialize_message(msg: Message) -> dict:
         "content": msg.content,
         "created_at": msg.created_at,
         "payload": msg.payload,
+    }
+
+
+def _first_profile_value(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _normalize_user_profile(raw_profile: Any) -> dict:
+    if not isinstance(raw_profile, dict):
+        return {
+            "user_id": "",
+            "nickname": "",
+            "avatar_url": "",
+            "signature": "",
+            "level": 0,
+            "source": "netease",
+        }
+
+    nested_profile = raw_profile.get("profile") if isinstance(raw_profile.get("profile"), dict) else {}
+    return {
+        "user_id": _first_profile_value(
+            raw_profile.get("user_id"),
+            raw_profile.get("userId"),
+            nested_profile.get("user_id"),
+            nested_profile.get("userId"),
+        ),
+        "nickname": _first_profile_value(
+            raw_profile.get("nickname"),
+            nested_profile.get("nickname"),
+        ),
+        "avatar_url": _first_profile_value(
+            raw_profile.get("avatar_url"),
+            raw_profile.get("avatarUrl"),
+            raw_profile.get("avatar"),
+            nested_profile.get("avatar_url"),
+            nested_profile.get("avatarUrl"),
+            nested_profile.get("avatar"),
+        ),
+        "signature": _first_profile_value(
+            raw_profile.get("signature"),
+            nested_profile.get("signature"),
+        ),
+        "level": raw_profile.get("level") or nested_profile.get("level") or 0,
+        "source": "netease",
     }
 
 
@@ -722,6 +836,7 @@ _INTERNAL_ERROR_MARKERS = (
     "failed to register environment variables",
     "error during request setup",
     "anonymous registration",
+    "reasoning_content",
     "not a function",
     "resolve_song_",
     "nativecommanderror",
@@ -784,13 +899,17 @@ def agent_chat(request: ChatRequest):
             for m in store.list_messages(conv_id, limit=200, offset=0)
         ]
         store.append_message(str(uuid4()), conv_id, "user", request.message)
-        agent_input = _build_agent_input(conv.memory_summary, history, request.message)
+        agent_input = _build_agent_input(conv.memory_summary, history, request.message, request.client_context)
         assistant_payload = None
+        client_action = None
 
         def on_agent_event(payload: dict):
-            nonlocal assistant_payload
-            if str(payload.get("event") or "").strip() == "rich_content":
+            nonlocal assistant_payload, client_action
+            event_name = str(payload.get("event") or "").strip()
+            if event_name == "rich_content":
                 assistant_payload = payload.get("payload")
+            if event_name == "client_action":
+                client_action = payload.get("payload")
 
         reply_text = run_three_layer_agent(agent_input, event_cb=on_agent_event)
         reply_text = reply_text if isinstance(reply_text, str) else str(reply_text)
@@ -803,7 +922,13 @@ def agent_chat(request: ChatRequest):
         except Exception:
             pass
 
-        return {"success": True, "reply": reply_text, "conversation_id": conv_id}
+        return {
+            "success": True,
+            "reply": reply_text,
+            "conversation_id": conv_id,
+            "payload": assistant_payload,
+            "client_action": client_action,
+        }
     except HTTPException:
         raise
     except BaseException as exc:
@@ -827,8 +952,16 @@ def agent_chat_stream(request: ChatRequest):
         q.put((event_name, payload))
 
     def worker():
+        request_started_at = time.perf_counter()
         progress_steps = _make_progress_steps()
         tool_states: Dict[str, dict] = {}
+        run_metrics: dict[str, Any] = {
+            "elapsed_ms": 0,
+            "stages": [],
+            "reflection": None,
+            "provider": None,
+            "models": {},
+        }
 
         def push_progress(stage_key: Optional[str], *, label: Optional[str] = None, description: Optional[str] = None):
             current_step = None
@@ -843,6 +976,7 @@ def agent_chat_stream(request: ChatRequest):
                 ),
                 steps=progress_steps,
                 tools=list(tool_states.values()),
+                metrics=run_metrics,
             )
 
         try:
@@ -878,7 +1012,7 @@ def agent_chat_stream(request: ChatRequest):
             ]
             user_msg = store.append_message(str(uuid4()), conv_id, "user", request.message)
             emit("message", message=_serialize_message(user_msg))
-            agent_input = _build_agent_input(conv.memory_summary, history, request.message)
+            agent_input = _build_agent_input(conv.memory_summary, history, request.message, request.client_context)
 
             def ensure_assistant_started():
                 nonlocal assistant_started
@@ -918,6 +1052,46 @@ def agent_chat_stream(request: ChatRequest):
                     if stage_key:
                         push_progress(stage_key)
                     return
+                if event_name == "run_started":
+                    run_metrics["provider"] = payload.get("provider")
+                    run_metrics["models"] = {
+                        "intent": payload.get("intent_model"),
+                        "tool": payload.get("tool_model"),
+                        "polish": payload.get("polish_model"),
+                    }
+                    emit("agent_run", **run_metrics)
+                    return
+                if event_name == "thought":
+                    emit(
+                        "thought",
+                        kind=payload.get("kind") or "thought",
+                        text=payload.get("text") or "",
+                        elapsed_ms=payload.get("elapsed_ms"),
+                        confidence=payload.get("confidence"),
+                        need_retry=payload.get("need_retry"),
+                    )
+                    return
+                if event_name == "stage_timing":
+                    run_metrics["elapsed_ms"] = payload.get("elapsed_ms") or run_metrics.get("elapsed_ms") or 0
+                    run_metrics["stages"].append(
+                        {
+                            "stage": payload.get("stage"),
+                            "label": payload.get("label"),
+                            "elapsed_ms": payload.get("elapsed_ms"),
+                            "use_polish": payload.get("use_polish"),
+                        }
+                    )
+                    emit("metrics", metrics=run_metrics)
+                    return
+                if event_name == "reflection":
+                    run_metrics["reflection"] = {
+                        "confidence": payload.get("confidence"),
+                        "summary": payload.get("summary"),
+                        "need_retry": bool(payload.get("need_retry")),
+                        "next_action": payload.get("next_action"),
+                    }
+                    emit("reflection", **run_metrics["reflection"])
+                    return
                 if event_name == "intent":
                     emit(
                         "intent",
@@ -951,8 +1125,15 @@ def agent_chat_stream(request: ChatRequest):
                     ensure_assistant_started()
                     emit("rich_content", message_id=assistant_message_id, payload=assistant_payload)
                     return
+                if event_name == "client_action":
+                    ensure_assistant_started()
+                    emit("client_action", message_id=assistant_message_id, payload=payload.get("payload") or {})
+                    return
                 if event_name == "done":
                     success = bool(payload.get("success"))
+                    run_metrics["elapsed_ms"] = payload.get("elapsed_ms") or int(
+                        (time.perf_counter() - request_started_at) * 1000
+                    )
                     _finish_progress(progress_steps, success)
                     emit(
                         "progress",
@@ -979,7 +1160,7 @@ def agent_chat_stream(request: ChatRequest):
 
             assistant_msg = store.append_message(assistant_message_id, conv_id, "assistant", reply_text, payload=assistant_payload)
             emit("message_commit", message=_serialize_message(assistant_msg))
-            emit("done", success=True)
+            emit("done", success=True, metrics=run_metrics)
             _schedule_memory_summary_refresh(conv_id, request.message, reply_text)
         except Exception as exc:
             safe_error_message = _safe_error_message(
@@ -1066,6 +1247,35 @@ def get_conversation_messages(conversation_id: str, limit: int = 200, offset: in
         "messages": [_serialize_message(item) for item in messages],
         "memory_summary": conv.memory_summary,
     }
+
+
+@router.get("/agent/user/profile")
+def get_user_profile():
+    try:
+        with _SONG_ENDPOINT_LOCK:
+            from tools.MusicTools.musicTools import user_detail
+
+            raw_profile = user_detail.invoke({}) if hasattr(user_detail, "invoke") else user_detail()
+
+        if isinstance(raw_profile, str):
+            return {
+                "success": False,
+                "profile": _normalize_user_profile({}),
+                "message": raw_profile,
+            }
+
+        return {
+            "success": True,
+            "profile": _normalize_user_profile(raw_profile),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return {
+            "success": False,
+            "profile": _normalize_user_profile({}),
+            "message": "user_profile_temporarily_unavailable",
+        }
 
 
 @router.get("/agent/songs/{song_id}/play")

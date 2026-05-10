@@ -833,6 +833,7 @@ def user_detail()-> str | dict[str | Any, Any]:
             simplified_user_info = {
                 'userId': profile.get('userId'),
                 'nickname': profile.get('nickname'),
+                'avatarUrl': profile.get('avatarUrl'),
                 'signature': profile.get('signature'),
                 'gender': profile.get('gender'),
                 'birthday': profile.get('birthday'),
@@ -5860,6 +5861,278 @@ def user_detail():
 @tool(description="获取当前帐号用户id")
 def get_user_id():
     return _get_user_id_impl()
+
+
+def _resolve_music_tool_limit(value: Any, default: int = 10, *, maximum: int = 20) -> int:
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError):
+        resolved = default
+    if resolved <= 0:
+        resolved = default
+    return min(resolved, maximum)
+
+
+def _normalize_song_search_items(raw_result: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+    if isinstance(raw_result, dict):
+        songs = raw_result.get("songs")
+    elif isinstance(raw_result, list):
+        songs = raw_result
+    else:
+        songs = []
+
+    if not isinstance(songs, list):
+        return []
+
+    normalized_items: list[dict[str, Any]] = []
+    for song in songs:
+        if not isinstance(song, dict):
+            continue
+
+        song_id = str(song.get("id") or "").strip()
+        name = str(song.get("name") or song.get("歌曲名字") or "").strip()
+        if not song_id or not name:
+            continue
+
+        artists = song.get("artists")
+        if not isinstance(artists, list):
+            artists = []
+
+        artist_text = str(song.get("artist") or song.get("歌手") or "").strip()
+        if not artist_text and artists:
+            artist_text = _join_artist_names(artists)
+
+        album = song.get("album")
+        if not isinstance(album, dict):
+            album = {
+                "id": None,
+                "name": song.get("专辑名字") or song.get("专辑名称") or song.get("album") or "",
+                "picUrl": song.get("cover_url") or song.get("封面url") or "",
+            }
+
+        cover_url = str(
+            song.get("cover_url")
+            or song.get("封面url")
+            or album.get("picUrl")
+            or album.get("cover_url")
+            or ""
+        ).strip()
+
+        normalized_items.append(
+            {
+                "id": song_id,
+                "name": name,
+                "artist": artist_text,
+                "artists": artists,
+                "album": {
+                    "id": album.get("id"),
+                    "name": album.get("name"),
+                    "picUrl": album.get("picUrl") or cover_url,
+                },
+                "cover_url": cover_url,
+                "duration": song.get("duration") or song.get("duration_ms") or song.get("时长") or song.get("dt"),
+                "publishTime": song.get("publishTime") or song.get("publish_time"),
+            }
+        )
+
+        if limit is not None and len(normalized_items) >= limit:
+            break
+
+    return normalized_items
+
+
+def _clean_scene_query(scene: Any) -> str:
+    value = str(scene or "").strip()
+    value = re.sub(r"(适合|推荐|来点|来首|播放|我想听|想听|听点|歌曲|音乐|歌单|听的歌|的歌)", "", value)
+    value = re.sub(r"\s+", " ", value).strip(" ，。！？,.!?；;：:")
+    if not value:
+        return ""
+
+    scene_aliases = {
+        "快乐": "开心",
+        "高兴": "开心",
+        "愉快": "开心",
+        "郁闷": "忧郁",
+        "难过": "伤感",
+        "emo": "伤感",
+        "安静": "放松",
+        "助眠": "睡前",
+        "夜晚": "夜晚",
+        "深夜": "夜晚",
+        "晚上": "夜晚",
+        "雨天": "下雨天",
+        "下雨": "下雨天",
+        "阴雨": "下雨天",
+        "通勤路上": "通勤",
+        "上班路上": "通勤",
+        "学习的时候": "学习",
+        "工作的时候": "工作",
+    }
+    lowered = value.lower()
+    for token, canonical in scene_aliases.items():
+        if token in value or token in lowered:
+            return canonical
+    return value
+
+
+def _search_song_candidates_impl(keywords: Any, limit: int = 10) -> dict[str, Any]:
+    query = str(keywords or "").strip()
+    resolved_limit = _resolve_music_tool_limit(limit, 10, maximum=20)
+    if not query:
+        return {
+            "query": "",
+            "songs": [],
+            "total": 0,
+            "error": "缺少歌曲关键词",
+        }
+
+    try:
+        result = search.invoke({"keywords": query, "type": 1, "limit": resolved_limit})
+    except Exception as exc:
+        return {
+            "query": query,
+            "songs": [],
+            "total": 0,
+            "error": f"搜索歌曲时出错: {exc}",
+        }
+
+    if isinstance(result, dict) and result.get("错误"):
+        return {
+            "query": query,
+            "songs": [],
+            "total": 0,
+            "error": str(result.get("错误") or "").strip() or "搜索歌曲失败",
+        }
+
+    songs = _normalize_song_search_items(result, limit=resolved_limit)
+    return {
+        "query": query,
+        "songs": songs,
+        "total": len(songs),
+    }
+
+
+def _search_scene_songs_impl(scene: Any, rank: int = 1, limit: int = 12) -> dict[str, Any]:
+    normalized_scene = _clean_scene_query(scene)
+    resolved_rank = _resolve_music_tool_limit(rank, 1, maximum=10)
+    resolved_limit = _resolve_music_tool_limit(limit, 12, maximum=20)
+    if not normalized_scene:
+        return {
+            "scene": "",
+            "songs": [],
+            "total": 0,
+            "error": "缺少场景关键词",
+        }
+
+    playlist_queries = [
+        f"{normalized_scene} 歌单",
+        normalized_scene,
+    ]
+    playlist_candidates: list[dict[str, Any]] = []
+    matched_query = ""
+    last_error = ""
+
+    for playlist_query in playlist_queries:
+        try:
+            playlist_result = search.invoke(
+                {
+                    "keywords": playlist_query,
+                    "type": 1000,
+                    "limit": max(5, resolved_rank + 2),
+                }
+            )
+        except Exception as exc:
+            last_error = f"搜索场景歌单时出错: {exc}"
+            continue
+
+        if isinstance(playlist_result, dict) and playlist_result.get("错误"):
+            last_error = str(playlist_result.get("错误") or "").strip()
+            continue
+
+        playlists = playlist_result.get("playlists") if isinstance(playlist_result, dict) else []
+        if isinstance(playlists, list) and playlists:
+            playlist_candidates = [item for item in playlists if isinstance(item, dict)]
+            matched_query = playlist_query
+            if playlist_candidates:
+                break
+
+    if not playlist_candidates:
+        fallback_result = _search_song_candidates_impl(f"{normalized_scene} 歌曲", resolved_limit)
+        fallback_result["scene"] = normalized_scene
+        fallback_result["matched_query"] = f"{normalized_scene} 歌曲"
+        fallback_result["search_strategy"] = "song_search_fallback"
+        if not fallback_result.get("songs") and last_error and not fallback_result.get("error"):
+            fallback_result["error"] = last_error
+        return fallback_result
+
+    selected_index = min(max(resolved_rank - 1, 0), len(playlist_candidates) - 1)
+    selected_playlist = playlist_candidates[selected_index]
+    playlist_id = str(selected_playlist.get("id") or "").strip()
+    if not playlist_id:
+        fallback_result = _search_song_candidates_impl(f"{normalized_scene} 歌曲", resolved_limit)
+        fallback_result["scene"] = normalized_scene
+        fallback_result["matched_query"] = matched_query
+        fallback_result["search_strategy"] = "song_search_fallback"
+        return fallback_result
+
+    try:
+        track_result = playlist_track_all.invoke({"id": playlist_id, "limit": resolved_limit, "offset": 0})
+    except Exception as exc:
+        return {
+            "scene": normalized_scene,
+            "songs": [],
+            "total": 0,
+            "matched_query": matched_query,
+            "matched_playlist": {
+                "id": selected_playlist.get("id"),
+                "name": selected_playlist.get("name"),
+                "creator": selected_playlist.get("creator", ""),
+                "trackCount": selected_playlist.get("trackCount"),
+            },
+            "error": f"获取场景歌单歌曲时出错: {exc}",
+        }
+
+    track_items = track_result.get("tracks") if isinstance(track_result, dict) else []
+    if not isinstance(track_items, list):
+        track_items = []
+
+    track_ids = [
+        str(item.get("id") or "").strip()
+        for item in track_items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ][:resolved_limit]
+
+    detailed_songs: Any = []
+    if track_ids:
+        try:
+            detailed_songs = song_details.invoke({"song_id": ",".join(track_ids)})
+        except Exception:
+            detailed_songs = []
+
+    songs = _normalize_song_search_items(detailed_songs or track_items, limit=resolved_limit)
+    return {
+        "scene": normalized_scene,
+        "songs": songs,
+        "total": len(songs),
+        "matched_query": matched_query,
+        "matched_playlist": {
+            "id": selected_playlist.get("id"),
+            "name": selected_playlist.get("name"),
+            "creator": selected_playlist.get("creator", ""),
+            "trackCount": selected_playlist.get("trackCount"),
+        },
+        "search_strategy": "playlist_tracks",
+    }
+
+
+@tool(description="搜索指定歌曲候选列表，适用于：播放某首歌、我想听某首歌、来首某歌。返回结构化歌曲列表。")
+def search_song_candidates(keywords: str, limit: int = 10):
+    return _search_song_candidates_impl(keywords, limit)
+
+
+@tool(description="按情绪或生活场景推荐歌曲，适用于：下雨天听的歌、开心一点的歌、夜晚适合听什么。优先从相关歌单中提取歌曲列表。")
+def search_scene_songs(scene: str, rank: int = 1, limit: int = 12):
+    return _search_scene_songs_impl(scene, rank, limit)
 
 
 

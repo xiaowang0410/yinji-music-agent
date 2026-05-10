@@ -1,70 +1,140 @@
-<template>
+﻿<template>
   <div class="agent-layout">
-    <aside class="agent-rail">
-      <div class="rail-top">
-        <div class="rail-title">对话</div>
-        <button class="rail-new" @click="createNewConversation" :disabled="sidebarLoading || loading">
-          新建对话
-        </button>
+    <aside class="agent-rail" aria-label="AI 音乐导航">
+      <div class="rail-user-card rail-user-card--top">
+        <div class="rail-user-avatar">
+          <img
+            v-if="userAvatarUrl"
+            class="rail-user-avatar-image"
+            :src="userAvatarUrl"
+            :alt="userDisplayName"
+            loading="lazy"
+            @error="userAvatarFailed = true"
+          />
+          <span v-else>{{ userInitial }}</span>
+        </div>
+        <div class="rail-user-copy">
+          <div class="rail-user-name">{{ userDisplayName }}</div>
+          <div class="rail-user-meta">{{ userProfileMeta }}</div>
+        </div>
+      </div>
+
+      <nav class="rail-nav" aria-label="主要功能">
+        <div
+          v-for="item in primarySidebarItems"
+          :key="item.key"
+          class="rail-nav-row"
+          :class="{ active: activeWorkspace === item.key, 'has-action': item.key === 'chat' }"
+        >
+          <button
+            type="button"
+            class="rail-nav-item"
+            @click="selectWorkspace(item.key)"
+          >
+            <span class="rail-nav-icon" :class="`is-${item.icon}`" aria-hidden="true">
+              <svg class="rail-nav-svg" viewBox="0 0 24 24" focusable="false">
+                <path
+                  v-for="path in sidebarIconPaths[item.icon]"
+                  :key="path.d"
+                  :d="path.d"
+                  :fill="path.fill || 'none'"
+                  :stroke="path.stroke || 'currentColor'"
+                  :stroke-width="path.strokeWidth || 1.9"
+                  :stroke-linecap="path.strokeLinecap || 'round'"
+                  :stroke-linejoin="path.strokeLinejoin || 'round'"
+                />
+              </svg>
+            </span>
+            <span class="rail-nav-label">{{ item.label }}</span>
+          </button>
+          <button
+            v-if="item.key === 'chat' && activeWorkspace === 'chat'"
+            class="rail-compose-btn"
+            type="button"
+            title="新建对话"
+            aria-label="新建对话"
+            :disabled="sidebarLoading || loading"
+            @click.stop="handleNewConversationClick"
+          >
+            <svg class="rail-compose-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 20h8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+              <path d="M15.8 4.9a2.12 2.12 0 0 1 3 3L8.7 18l-4.1 1.1L5.7 15 15.8 4.9Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </nav>
+
+      <section class="rail-conversations" aria-label="对话列表">
+        <div class="rail-section-head">
+          <span>最近对话</span>
+          <span class="rail-section-count">{{ filteredConversations.length }}</span>
+        </div>
 
         <div class="rail-search">
           <input v-model="query" class="rail-search-input" placeholder="搜索对话" />
         </div>
-      </div>
 
-      <div v-if="filteredConversations.length > 0" class="rail-list">
-        <div
-          v-for="conversation in filteredConversations"
-          :key="conversation.id"
-          class="rail-item"
-          :class="{ active: conversation.id === activeConversationId }"
-          @click="selectConversation(conversation.id)"
-          @keydown.enter.prevent="selectConversation(conversation.id)"
-          tabindex="0"
-          role="button"
-        >
-          <div class="rail-item-head">
-            <input
-              v-if="editingConversationId === conversation.id"
-              v-model="editingTitle"
-              class="rail-title-input"
-              maxlength="20"
-              @click.stop
-              @keydown.enter.prevent="commitRenameConversation(conversation.id)"
-              @keydown.esc.prevent="cancelRenameConversation"
-              @blur="commitRenameConversation(conversation.id)"
-              autofocus
-            />
-            <div v-else class="rail-item-title">{{ conversation.title || DEFAULT_TITLE }}</div>
-            <div class="rail-item-actions">
-              <button class="item-action-btn" title="重命名" @click.stop="startRenameConversation(conversation)">
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
-                  <path d="M12 20h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </button>
-              <button
-                class="item-action-btn danger"
-                title="删除对话"
-                :disabled="deletingConversationId === conversation.id || loading"
-                @click.stop="deleteConversation(conversation.id)"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
-                  <path d="M3 6h18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M8 6V4h8v2m-9 0 1 14h8l1-14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </button>
+        <div v-if="filteredConversations.length > 0" class="rail-list">
+          <div
+            v-for="conversation in filteredConversations"
+            :key="conversation.id"
+            class="rail-item"
+            :class="{ active: conversation.id === activeConversationId }"
+            @click="selectConversation(conversation.id)"
+            @keydown.enter.prevent="selectConversation(conversation.id)"
+            tabindex="0"
+            role="button"
+          >
+            <div class="rail-item-head">
+              <input
+                v-if="editingConversationId === conversation.id"
+                v-model="editingTitle"
+                class="rail-title-input"
+                maxlength="20"
+                @click.stop
+                @keydown.enter.prevent="commitRenameConversation(conversation.id)"
+                @keydown.esc.prevent="cancelRenameConversation"
+                @blur="commitRenameConversation(conversation.id)"
+                autofocus
+              />
+              <div v-else class="rail-item-title">{{ conversation.title || DEFAULT_TITLE }}</div>
+              <div class="rail-item-actions">
+                <button
+                  class="item-action-btn"
+                  title="重命名"
+                  aria-label="重命名对话"
+                  @click.stop="startRenameConversation(conversation)"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
+                    <path d="M12 20h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+                <button
+                  class="item-action-btn danger"
+                  title="删除对话"
+                  aria-label="删除对话"
+                  :disabled="deletingConversationId === conversation.id || loading"
+                  @click.stop="deleteConversation(conversation.id)"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
+                    <path d="M3 6h18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M8 6V4h8v2m-9 0 1 14h8l1-14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
-          <div class="rail-item-meta">{{ formatTime(conversation.updated_at) }}</div>
         </div>
-      </div>
 
-      <div v-else class="rail-empty">
-        <div class="rail-empty-title">还没有对话</div>
-        <div class="rail-empty-sub">发送一条消息，或者手动新建一个空白会话。</div>
-      </div>
+        <div v-else class="rail-empty">
+          <div class="rail-empty-title">还没有对话</div>
+          <div class="rail-empty-sub">发送一条消息，或者手动新建一个空白会话。</div>
+        </div>
+      </section>
+
+      <div class="rail-spacer" aria-hidden="true"></div>
 
       <div class="rail-player-slot">
         <MusicPlayerCard
@@ -112,18 +182,23 @@
           :volume-slider-style="volumeSliderStyle"
         />
       </div>
+
     </aside>
 
-    <main class="chat-shell">
+    <main v-if="activeWorkspace === 'chat'" class="chat-shell">
       <header class="chat-topbar">
-        <div class="chat-topbar-title">{{ activeConversationTitle || DEFAULT_TITLE }}</div>
+        <div>
+          <div class="chat-eyebrow">AI MUSIC CONVERSATION</div>
+          <div class="chat-topbar-title">{{ activeConversationTitle || DEFAULT_TITLE }}</div>
+        </div>
         <div v-if="memorySummary" class="chat-topbar-sub" :title="memorySummary">记忆：{{ memorySummary }}</div>
       </header>
 
       <section ref="messagesList" class="chat-body">
         <div v-if="messages.length === 0" class="welcome-card">
+          <div class="welcome-kicker">今晚想听点什么？</div>
           <div class="welcome-title">你好，我是小听</div>
-          <div class="welcome-sub">我是音迹里的智能音乐助手，由小汪开发。我会把执行进度和流式输出同步展示给你。</div>
+          <div class="welcome-sub">告诉我你的心情、场景或想听的歌，我会尽量给你一组可直接播放的音乐建议。</div>
           <div class="quick-questions">
             <button
               v-for="question in MUSIC_QUICK_QUESTIONS"
@@ -166,6 +241,27 @@
               <span class="tool-status" :class="`is-${tool.status || 'pending'}`">{{ formatToolStatus(tool.status) }}</span>
             </div>
           </div>
+
+          <div v-if="observabilityVisible" class="agent-observability">
+            <div class="observability-head">
+              <span>Agent Trace</span>
+              <span v-if="runMetrics.elapsed_ms" class="observability-time">{{ formatElapsed(runMetrics.elapsed_ms) }}</span>
+            </div>
+            <div v-if="runMetrics.provider || modelSummary" class="observability-meta">
+              <span v-if="runMetrics.provider">{{ runMetrics.provider }}</span>
+              <span v-if="modelSummary">{{ modelSummary }}</span>
+            </div>
+            <div v-if="agentThoughts.length > 0" class="thought-list">
+              <div v-for="item in agentThoughts" :key="item.id" class="thought-item" :class="`is-${item.kind || 'thought'}`">
+                <span class="thought-kind">{{ formatThoughtKind(item.kind) }}</span>
+                <span class="thought-text">{{ item.text }}</span>
+              </div>
+            </div>
+            <div v-if="runMetrics.reflection?.summary" class="reflection-box">
+              <span class="reflection-label">反思</span>
+              <span>{{ runMetrics.reflection.summary }}</span>
+            </div>
+          </div>
         </div>
 
         <AgentMessageBubble
@@ -178,6 +274,7 @@
           :pending-song-id="pendingSongId"
           :is-audio-playing="isAudioPlaying"
           :thinking-state="thinkingBubbleState"
+          :user-profile="userProfile"
           @play-song="handleRichSongPlay"
         />
 
@@ -191,6 +288,7 @@
           :pending-song-id="pendingSongId"
           :is-audio-playing="isAudioPlaying"
           :thinking-state="thinkingBubbleState"
+          :user-profile="userProfile"
         />
       </section>
 
@@ -202,7 +300,7 @@
             v-model="inputMessage"
             type="text"
             class="message-input"
-            placeholder="输入你的问题"
+            placeholder="输入你想听的歌、心情或问题"
             :disabled="loading"
             @compositionstart="isComposing = true"
             @compositionend="isComposing = false"
@@ -213,6 +311,33 @@
       </footer>
     </main>
 
+    <main v-else class="workspace-shell">
+      <section class="workspace-hero">
+        <div class="workspace-eyebrow">{{ activeWorkspaceMeta.eyebrow }}</div>
+        <h1>{{ activeWorkspaceMeta.label }}</h1>
+        <p>{{ activeWorkspaceMeta.description }}</p>
+      </section>
+      <section class="workspace-empty-card">
+        <div class="workspace-empty-mark" :class="`is-${activeWorkspaceMeta.icon}`" aria-hidden="true">
+          <svg class="workspace-empty-icon" viewBox="0 0 24 24" focusable="false">
+            <path
+              v-for="path in sidebarIconPaths[activeWorkspaceMeta.icon]"
+              :key="path.d"
+              :d="path.d"
+              :fill="path.fill || 'none'"
+              :stroke="path.stroke || 'currentColor'"
+              :stroke-width="path.strokeWidth || 1.9"
+              :stroke-linecap="path.strokeLinecap || 'round'"
+              :stroke-linejoin="path.strokeLinejoin || 'round'"
+            />
+          </svg>
+        </div>
+        <div class="workspace-empty-copy">
+          <h2>{{ activeWorkspaceMeta.emptyTitle }}</h2>
+          <p>{{ activeWorkspaceMeta.emptyText }}</p>
+        </div>
+      </section>
+    </main>
     <Teleport to="body">
       <Transition name="music-fullscreen-page">
         <div
@@ -497,6 +622,110 @@ const MUSIC_QUICK_QUESTIONS = [
   { label: '我的点赞歌曲', prompt: '我点赞的歌曲有哪些' },
   { label: '推荐今晚听的歌', prompt: '推荐几首适合今晚循环播放的歌' },
 ]
+const sidebarIconPaths = Object.freeze({
+  chat: [
+    { d: 'M6.8 6.25h10.4a3.05 3.05 0 0 1 3.05 3.05v4.25a3.05 3.05 0 0 1-3.05 3.05h-4.45l-4.1 3.15v-3.15H6.8a3.05 3.05 0 0 1-3.05-3.05V9.3A3.05 3.05 0 0 1 6.8 6.25Z' },
+    { d: 'M8.15 10.2h7.7' },
+    { d: 'M8.15 13.15h4.65' },
+  ],
+  discover: [
+    { d: 'M12 20.25a8.25 8.25 0 1 0 0-16.5 8.25 8.25 0 0 0 0 16.5Z' },
+    { d: 'm9.35 14.65 1.28-4.02 4.02-1.28-1.28 4.02-4.02 1.28Z' },
+    { d: 'M12 12h.01', strokeWidth: 2.7 },
+  ],
+  songs: [
+    { d: 'M14.75 5.25v9.95a3 3 0 1 1-1.85-2.76V7.15l4.85-1.08' },
+    { d: 'M14.75 7.15 17.75 6.48' },
+    { d: 'M6.25 6.55 7.1 4.85l.85 1.7 1.75.25-1.27 1.24.3 1.74L7.1 8.96l-1.56.82.3-1.74L4.55 6.8l1.7-.25Z' },
+  ],
+  playlists: [
+    { d: 'M5 7.25h8.7' },
+    { d: 'M5 11.6h8.7' },
+    { d: 'M5 15.95h6.1' },
+    { d: 'M17.2 7.75v8.55a2.25 2.25 0 1 1-1.45-2.1V8.65l3.25-.75' },
+  ],
+  favorite: [
+    { d: 'M12 19.7 10.9 18.7C6.2 14.45 3.55 12 3.55 8.9a3.82 3.82 0 0 1 3.92-3.9A4.5 4.5 0 0 1 12 7.55 4.5 4.5 0 0 1 16.53 5a3.82 3.82 0 0 1 3.92 3.9c0 3.1-2.65 5.55-7.35 9.8L12 19.7Z' },
+  ],
+  history: [
+    { d: 'M4.15 12.15a7.85 7.85 0 1 0 2.3-5.55' },
+    { d: 'M4.15 5.05v4.25h4.25' },
+    { d: 'M12 8.15v4.25l2.85 1.75' },
+  ],
+  memory: [
+    { d: 'M8.1 4.4h7.8a2.75 2.75 0 0 1 2.75 2.75v9.7a2.75 2.75 0 0 1-2.75 2.75H8.1a2.75 2.75 0 0 1-2.75-2.75v-9.7A2.75 2.75 0 0 1 8.1 4.4Z' },
+    { d: 'M9 8.55h6' },
+    { d: 'M9 12h6' },
+    { d: 'M9 15.45h3.35' },
+    { d: 'M7.45 4.4V2.85' },
+    { d: 'M16.55 4.4V2.85' },
+  ],
+})
+const SIDEBAR_ITEMS = Object.freeze([
+  {
+    key: 'chat',
+    label: '对话',
+    icon: 'chat',
+    eyebrow: 'Conversation',
+    description: '和 AI 音乐助手沟通，搜索、推荐和播放都从这里开始。',
+    emptyTitle: '开始一段音乐对话',
+    emptyText: '这里承载聊天主流程，右侧会展示完整对话。',
+  },
+  {
+    key: 'discover',
+    label: '探索发现',
+    icon: 'discover',
+    eyebrow: 'Explore',
+    description: '为新歌、热门内容和风格发现预留的入口。',
+    emptyTitle: '探索发现还在搭骨架',
+    emptyText: '下一步可以接入热搜、排行榜、歌手和主题歌单工具。',
+  },
+  {
+    key: 'recommendedSongs',
+    label: '推荐歌曲',
+    icon: 'songs',
+    eyebrow: 'Songs',
+    description: '集中展示每日推荐、场景推荐和 Agent 生成的歌曲列表。',
+    emptyTitle: '推荐歌曲区域已预留',
+    emptyText: '后续可以把每日推荐、心情推荐和指定歌曲搜索结果都汇聚到这里。',
+  },
+  {
+    key: 'recommendedPlaylists',
+    label: '推荐歌单',
+    icon: 'playlists',
+    eyebrow: 'Playlists',
+    description: '承载推荐歌单、精品歌单和场景歌单。',
+    emptyTitle: '推荐歌单区域已预留',
+    emptyText: '这里后续会接歌单搜索、歌单详情和一键播放能力。',
+  },
+  {
+    key: 'favorites',
+    label: '收藏音乐',
+    icon: 'favorite',
+    eyebrow: 'Library',
+    description: '展示用户收藏、点赞和沉淀下来的音乐资产。',
+    emptyTitle: '收藏音乐区域已预留',
+    emptyText: '后续可以接点赞歌曲、收藏歌单、收藏歌手等工具。',
+  },
+  {
+    key: 'history',
+    label: '听歌历史',
+    icon: 'history',
+    eyebrow: 'History',
+    description: '根据播放历史理解用户最近的音乐轨迹。',
+    emptyTitle: '听歌历史区域已预留',
+    emptyText: '后续可以接播放记录工具，生成最近常听和口味变化。',
+  },
+  {
+    key: 'memory',
+    label: 'AI 记忆',
+    icon: 'memory',
+    eyebrow: 'Memory',
+    description: '展示 AI 对用户音乐偏好、场景习惯和长期上下文的记忆。',
+    emptyTitle: 'AI 记忆区域已预留',
+    emptyText: '后续这里会成为可查看、可编辑、可删除的音乐记忆中心。',
+  },
+])
 const thinkingPlaceholderMessage = Object.freeze({
   id: 'prestream-thinking',
   role: 'assistant',
@@ -523,9 +752,23 @@ const progress = ref({
   current_stage_description: '',
   steps: [],
   tools: [],
+  metrics: null,
 })
+const runMetrics = ref({
+  elapsed_ms: 0,
+  stages: [],
+  reflection: null,
+  provider: '',
+  models: {},
+})
+const agentThoughts = ref([])
 const assistantStreaming = ref(false)
 const currentAssistantMessageId = ref(null)
+const pendingAutoPlayRequest = ref(null)
+const pendingClientAction = ref(null)
+const activeWorkspace = ref('chat')
+const userProfile = ref(null)
+const userAvatarFailed = ref(false)
 
 const {
   activeLyricLine,
@@ -534,6 +777,7 @@ const {
   canPlayPrev,
   currentLyricIndex,
   currentLyrics,
+  currentQueue,
   currentTrackId,
   elapsedTimeLabel,
   handleAudioEnded,
@@ -551,6 +795,7 @@ const {
   isAudioPlaying,
   isMuted,
   lyricsLoading,
+  pauseCurrentTrack,
   pendingSongId,
   playNextTrack,
   playbackOrderMode,
@@ -566,6 +811,7 @@ const {
   progressSliderStyle,
   remainingTimeLabel,
   repeatMode,
+  resumeCurrentTrack,
   secondaryLyricLine,
   setPlayerError,
   seekCurrentTrack,
@@ -601,6 +847,29 @@ const activeConversationTitle = computed(() => {
   return found?.title || ''
 })
 
+const primarySidebarItems = computed(() => SIDEBAR_ITEMS)
+const activeWorkspaceMeta = computed(() => {
+  return SIDEBAR_ITEMS.find((item) => item.key === activeWorkspace.value) || SIDEBAR_ITEMS[0]
+})
+const userAvatarUrl = computed(() => {
+  if (userAvatarFailed.value) return ''
+  return String(userProfile.value?.avatar_url || userProfile.value?.avatarUrl || '').trim()
+})
+const userDisplayName = computed(() => {
+  return String(userProfile.value?.nickname || userProfile.value?.name || '').trim() || '音乐用户'
+})
+const userInitial = computed(() => {
+  const name = userDisplayName.value
+  return name ? name.slice(0, 1).toUpperCase() : '我'
+})
+const userProfileMeta = computed(() => {
+  const signature = String(userProfile.value?.signature || '').trim()
+  if (signature) return signature
+  const level = Number(userProfile.value?.level)
+  if (Number.isFinite(level) && level > 0) return `Lv.${level} 网易云音乐`
+  return '网易云音乐'
+})
+
 const heartModeAccessoryTitle = computed(() => {
   if (heartModeLoading.value) return '正在准备心动模式'
   if (heartModeActive.value) return '重新生成心动模式'
@@ -621,6 +890,23 @@ const shouldShowProgress = computed(() => {
     !!progress.value.current_stage_label ||
     !!progress.value.current_stage_description
   )
+})
+
+const observabilityVisible = computed(() => {
+  return (
+    agentThoughts.value.length > 0 ||
+    !!runMetrics.value.provider ||
+    !!runMetrics.value.elapsed_ms ||
+    !!runMetrics.value.reflection?.summary
+  )
+})
+
+const modelSummary = computed(() => {
+  const models = runMetrics.value.models || {}
+  const values = [models.intent, models.tool, models.polish]
+    .filter(Boolean)
+    .map((item) => String(item))
+  return [...new Set(values)].join(' / ')
 })
 
 const musicFullscreenBackgroundStyle = computed(() => {
@@ -724,6 +1010,43 @@ function isToolRunningStatus(status) {
   return ['running', 'in_progress', 'processing', 'active'].includes(normalized)
 }
 
+function formatElapsed(ms) {
+  const value = Number(ms) || 0
+  if (value <= 0) return ''
+  if (value < 1000) return `${Math.round(value)}ms`
+  return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)}s`
+}
+
+function formatThoughtKind(kind) {
+  const normalized = String(kind || '').trim().toLowerCase()
+  if (normalized === 'reflection') return '反思'
+  if (normalized === 'plan') return '思考'
+  return '观察'
+}
+
+function selectWorkspace(workspaceKey) {
+  if (!SIDEBAR_ITEMS.some((item) => item.key === workspaceKey)) return
+  activeWorkspace.value = workspaceKey
+}
+
+async function handleNewConversationClick() {
+  activeWorkspace.value = 'chat'
+  await createNewConversation()
+}
+
+async function loadUserProfile() {
+  try {
+    const response = await agentApi.getUserProfile()
+    const profile = response?.profile && typeof response.profile === 'object' ? response.profile : null
+    if (profile) {
+      userProfile.value = profile
+      userAvatarFailed.value = false
+    }
+  } catch (error) {
+    console.warn('load user profile error:', error)
+  }
+}
+
 function resolveThinkingToolName(tool) {
   return String(tool?.tool_name || tool?.name || tool?.tool || '').trim()
 }
@@ -783,19 +1106,6 @@ const showPrestreamThinking = computed(() => {
   if (!loading.value || assistantStreaming.value) return false
   return !messages.value.some((item) => !isUserRole(item.role) && !String(item.content || '').trim() && !hasRichContent(item))
 })
-
-function formatTime(iso) {
-  if (!iso) return ''
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return ''
-  const now = new Date()
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  if (sameDay) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  return date.toLocaleDateString()
-}
 
 function upsertConversation(conversation) {
   if (!conversation?.id) return
@@ -894,6 +1204,247 @@ function appendAssistantDelta(text, messageId) {
   messages.value = [...messages.value]
 }
 
+function appendLocalAssistantMessage(content, payload = null) {
+  const normalized = normalizeMessage({
+    id: `local_assistant_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    role: 'assistant',
+    content,
+    payload,
+    timestamp: new Date().toISOString(),
+  })
+  if (!normalized) return
+  messages.value.push(normalized)
+  messages.value = [...messages.value]
+  scrollToBottom()
+}
+
+function mergeAssistantActionMessage(content, messageId = currentAssistantMessageId.value) {
+  const text = sanitizeInternalFailureText(
+    String(content || '').trim(),
+    '后端服务刚刚出错了，请稍后再试。',
+  )
+  if (!text) return
+
+  const target = ensureAssistantMessage(messageId)
+  if (!target) {
+    appendLocalAssistantMessage(text)
+    return
+  }
+
+  const current = String(target.content || '').trim()
+  if (!current) {
+    target.content = text
+  } else if (!current.includes(text)) {
+    target.content = `${current}\n\n${text}`
+  }
+  messages.value = [...messages.value]
+  scrollToBottom()
+}
+
+function normalizeCommandText(value) {
+  return String(value || '').replace(/\s+/g, '').toLowerCase()
+}
+
+function currentTrackSummary() {
+  if (!hasActiveTrack.value) return '现在还没有正在播放的歌曲。'
+  const track = playerDisplayTrack.value || {}
+  const parts = [
+    `当前播放：${track.name || '未知歌曲'}`,
+    track.artist ? `歌手：${track.artist}` : '',
+    track.album ? `专辑：${track.album}` : '',
+    `状态：${isAudioPlaying.value ? '正在播放' : '已暂停'}`,
+    playerDuration.value > 0 ? `进度：${elapsedTimeLabel.value} / ${musicFullscreenDurationLabel.value}` : '',
+  ].filter(Boolean)
+  return parts.join('\n')
+}
+
+function buildPlayerStateForAgent() {
+  const track = hasActiveTrack.value ? (playerDisplayTrack.value || {}) : null
+  const queue = Array.isArray(currentQueue.value)
+    ? currentQueue.value.slice(0, 20).map((item) => ({
+        id: String(item?.id || ''),
+        name: String(item?.name || ''),
+        artist: String(item?.artist || ''),
+      }))
+    : []
+  return {
+    player: {
+      has_active_track: !!track,
+      is_playing: !!isAudioPlaying.value,
+      status_text: playerStatusText.value,
+      current_time_seconds: Number(playerCurrentTime.value) || 0,
+      duration_seconds: Number(playerDuration.value) || 0,
+      current_track: track
+        ? {
+            id: String(track.id || ''),
+            name: String(track.name || ''),
+            artist: String(track.artist || ''),
+            album: String(track.album || ''),
+          }
+        : null,
+      queue_size: Array.isArray(currentQueue.value) ? currentQueue.value.length : 0,
+      queue,
+    },
+    capabilities: [
+      'answer_current_track',
+      'pause',
+      'resume',
+      'next_track',
+      'previous_track',
+      'autoplay_song_list',
+      'autoplay_playlist_tracks',
+    ],
+  }
+}
+
+function shouldAutoPlayFromRequest(text) {
+  const normalized = normalizeCommandText(text)
+  if (!/(播放|放一|来点|来首|听|开始放)/.test(normalized)) return false
+  return /(点赞|喜欢|收藏|推荐|歌单|忧郁|郁闷|难过|伤感|开心|快乐|放松|安静|治愈|热血|睡前|工作|学习|运动|通勤)/.test(normalized)
+}
+
+function pickPlaylistForAutoPlay(payload, requestText = '') {
+  const items = Array.isArray(payload?.items) ? payload.items : []
+  if (!items.length) return null
+
+  const normalizedRequest = normalizeCommandText(requestText)
+  const rankMatch = normalizedRequest.match(/第([一二三四五六七八九十\d]+)个?歌单/)
+  if (rankMatch) {
+    const digits = {
+      一: 1,
+      二: 2,
+      三: 3,
+      四: 4,
+      五: 5,
+      六: 6,
+      七: 7,
+      八: 8,
+      九: 9,
+      十: 10,
+    }
+    const rawRank = rankMatch[1]
+    const rank = /^\d+$/.test(rawRank) ? Number(rawRank) : digits[rawRank]
+    if (Number.isFinite(rank) && rank > 0 && items[rank - 1]) {
+      return items[rank - 1]
+    }
+  }
+
+  const named = items.find((item) => {
+    const name = normalizeCommandText(item?.name)
+    return name && normalizedRequest.includes(name)
+  })
+  return named || items[0]
+}
+
+async function playPlaylistFromPayload(payload, actionPayload = {}) {
+  const items = Array.isArray(payload?.items) ? payload.items : []
+  const request = pendingAutoPlayRequest.value
+  const rank = Number(actionPayload?.rank)
+  const selectedPlaylist = Number.isFinite(rank) && rank > 0 && items[rank - 1]
+    ? items[rank - 1]
+    : pickPlaylistForAutoPlay(payload, request?.text || actionPayload?.playlist_name || '')
+  const playlistId = String(selectedPlaylist?.id || '').trim()
+  if (!playlistId) return false
+
+  try {
+    const response = await agentApi.getPlaylistTracks(playlistId, { limit: 100, offset: 0 })
+    const songs = Array.isArray(response?.songs) ? response.songs : []
+    if (!songs.length) {
+      mergeAssistantActionMessage('我找到了歌单，但这个歌单暂时没有可播放的歌曲。')
+      return false
+    }
+
+    pendingAutoPlayRequest.value = null
+    heartModeActive.value = false
+    clearPlayerError()
+    await playQueue(songs, 0)
+    return true
+  } catch (error) {
+    console.error('auto play playlist error:', error)
+    const message = formatAxiosError(error)
+    mergeAssistantActionMessage(message || '我找到了歌单，但暂时没能自动加载里面的歌曲。你可以点开歌单再试一次。')
+    return false
+  }
+}
+
+function maybeAutoPlayPayload(payload) {
+  const request = pendingAutoPlayRequest.value
+  const clientAction = pendingClientAction.value
+  if (!request && !clientAction) return
+  if (!payload || typeof payload !== 'object') return
+  const items = Array.isArray(payload.items) ? payload.items : []
+  if (!items.length) return
+
+  if (payload.kind === 'song_list') {
+    pendingAutoPlayRequest.value = null
+    pendingClientAction.value = null
+    heartModeActive.value = false
+    clearPlayerError()
+    const rank = Number(clientAction?.payload?.rank)
+    const startIndex = Number.isFinite(rank) && rank > 0 ? rank - 1 : 0
+    void playQueue(items, startIndex)
+    return
+  }
+
+  if (payload.kind === 'playlist_list') {
+    void playPlaylistFromPayload(payload, clientAction?.payload || {})
+  }
+}
+
+async function handleClientAction(actionPayload) {
+  const actionType = String(actionPayload?.type || '').trim()
+  const legacyAction = typeof actionPayload?.action === 'string'
+    ? actionPayload.action
+    : actionPayload?.action?.action
+  const actionFromType = actionType.replace(/^player\./, '').replace(/\./g, '_')
+  const action = String(legacyAction || actionFromType || '').trim()
+  const payload = actionPayload?.payload && typeof actionPayload.payload === 'object'
+    ? actionPayload.payload
+    : {}
+  const message = String(actionPayload?.message || '').trim()
+
+  if (!action) return
+
+  if (action === 'answer_current_track') {
+    mergeAssistantActionMessage(message || currentTrackSummary())
+    return
+  }
+
+  if (action === 'pause') {
+    const ok = pauseCurrentTrack()
+    if (!ok) mergeAssistantActionMessage('现在还没有正在播放的歌曲。')
+    return
+  }
+
+  if (action === 'resume') {
+    const ok = await resumeCurrentTrack()
+    if (!ok) mergeAssistantActionMessage('现在还没有可继续播放的歌曲。')
+    return
+  }
+
+  if (action === 'next_track') {
+    if (canPlayNext.value) {
+      playNextTrack()
+    } else {
+      mergeAssistantActionMessage('当前队列里没有下一首。')
+    }
+    return
+  }
+
+  if (action === 'previous_track') {
+    if (canPlayPrev.value) {
+      playPrevTrack()
+    } else {
+      mergeAssistantActionMessage('当前队列里没有上一首。')
+    }
+    return
+  }
+
+  if (action === 'play_song_list' || action === 'play_playlist_tracks') {
+    pendingClientAction.value = { action, payload, message, createdAt: Date.now() }
+  }
+}
+
 function resetProgress() {
   progress.value = {
     current_stage: null,
@@ -901,7 +1452,16 @@ function resetProgress() {
     current_stage_description: '',
     steps: [],
     tools: [],
+    metrics: null,
   }
+  runMetrics.value = {
+    elapsed_ms: 0,
+    stages: [],
+    reflection: null,
+    provider: '',
+    models: {},
+  }
+  agentThoughts.value = []
 }
 
 async function loadConversations() {
@@ -1245,6 +1805,13 @@ function handleStreamEvent(event, data) {
     requestError.value = ''
     if (data.message_id) currentAssistantMessageId.value = data.message_id
     attachMessagePayload(data.payload, data.message_id)
+    maybeAutoPlayPayload(normalizePayload(data.payload))
+    return
+  }
+  if (event === 'client_action' && data.payload) {
+    requestError.value = ''
+    if (data.message_id) currentAssistantMessageId.value = data.message_id
+    void handleClientAction(data.payload)
     return
   }
   if (event === 'delta' && typeof data.text === 'string') {
@@ -1273,6 +1840,46 @@ function handleStreamEvent(event, data) {
     upsertMessage(data.message)
     return
   }
+  if (event === 'agent_run') {
+    runMetrics.value = {
+      ...runMetrics.value,
+      ...data,
+      models: data.models || runMetrics.value.models || {},
+    }
+    return
+  }
+  if (event === 'metrics' && data.metrics) {
+    runMetrics.value = {
+      ...runMetrics.value,
+      ...data.metrics,
+      models: data.metrics.models || runMetrics.value.models || {},
+    }
+    return
+  }
+  if (event === 'thought' && data.text) {
+    agentThoughts.value = [
+      ...agentThoughts.value.slice(-5),
+      {
+        id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        kind: data.kind || 'thought',
+        text: data.text,
+        elapsed_ms: data.elapsed_ms || 0,
+      },
+    ]
+    return
+  }
+  if (event === 'reflection') {
+    runMetrics.value = {
+      ...runMetrics.value,
+      reflection: {
+        confidence: data.confidence || '',
+        summary: data.summary || '',
+        need_retry: !!data.need_retry,
+        next_action: data.next_action || '',
+      },
+    }
+    return
+  }
   if (event === 'progress') {
     progress.value = {
       current_stage: data.current_stage || null,
@@ -1283,6 +1890,14 @@ function handleStreamEvent(event, data) {
       ),
       steps: Array.isArray(data.steps) ? data.steps : [],
       tools: Array.isArray(data.tools) ? data.tools : [],
+      metrics: data.metrics || null,
+    }
+    if (data.metrics) {
+      runMetrics.value = {
+        ...runMetrics.value,
+        ...data.metrics,
+        models: data.metrics.models || runMetrics.value.models || {},
+      }
     }
     return
   }
@@ -1296,6 +1911,11 @@ async function sendMessage(explicitText) {
   if (!text || loading.value) return
 
   requestError.value = ''
+
+  pendingAutoPlayRequest.value = shouldAutoPlayFromRequest(text)
+    ? { text, createdAt: Date.now() }
+    : null
+  pendingClientAction.value = null
   loading.value = true
   assistantStreaming.value = false
   currentAssistantMessageId.value = null
@@ -1316,11 +1936,19 @@ async function sendMessage(explicitText) {
   try {
     const res = await agentApi.chatStream(text, activeConversationId.value, {
       onEvent: handleStreamEvent,
+      clientContext: buildPlayerStateForAgent(),
     })
 
     if (res.conversation) upsertConversation(res.conversation)
     if (res.memory_summary) memorySummary.value = res.memory_summary
     if (res.message) upsertMessage(res.message)
+    if (res.metrics) {
+      runMetrics.value = {
+        ...runMetrics.value,
+        ...res.metrics,
+        models: res.metrics.models || runMetrics.value.models || {},
+      }
+    }
     const resolvedConversationId = res.conversation_id || activeConversationId.value
     if (resolvedConversationId) {
       activeConversationId.value = resolvedConversationId
@@ -1430,6 +2058,7 @@ watch(
 onMounted(() => {
   ;(async () => {
     try {
+    void loadUserProfile()
     await loadConversations()
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
@@ -1465,6 +2094,22 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .agent-layout {
+  --page-ink: #252722;
+  --page-muted: #8a8d82;
+  --page-soft: #f8faf7;
+  --page-card: rgba(255, 255, 255, 0.86);
+  --page-line: rgba(35, 39, 35, 0.1);
+  --page-accent: #2f332f;
+  --page-accent-strong: #202420;
+  --page-honey: #f2f3f1;
+  --page-shadow: 0 22px 60px rgba(24, 28, 24, 0.08);
+  --page-shadow-soft: 0 12px 30px rgba(24, 28, 24, 0.06);
+  --glass-shadow: var(--page-shadow);
+  --glass-shadow-soft: var(--page-shadow-soft);
+  --text-primary: var(--page-ink);
+  --text-secondary: var(--page-muted);
+  --text-muted: rgba(128, 134, 121, 0.78);
+  --active-color: var(--page-accent-strong);
   width: 100%;
   min-width: 100%;
   max-width: 100%;
@@ -1472,108 +2117,356 @@ onBeforeUnmount(() => {
   min-height: 100%;
   max-height: 100%;
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
-  gap: 18px;
-  padding: 18px;
-  background: transparent;
+  grid-template-columns: clamp(248px, 15.5vw, 282px) minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  background:
+    radial-gradient(circle at 16% 12%, rgba(245, 246, 244, 0.62), transparent 27%),
+    radial-gradient(circle at 88% 6%, rgba(250, 250, 249, 0.95), transparent 34%),
+    linear-gradient(135deg, #ffffff 0%, #fafafa 48%, #ffffff 100%);
   min-width: 0;
   position: relative;
   -webkit-user-select: none;
   user-select: none;
-}
-
-.agent-rail {
-  height: auto;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid rgba(255, 255, 255, 0.48);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.18));
-  backdrop-filter: blur(28px) saturate(165%);
-  box-shadow: var(--glass-shadow);
-  border-radius: 30px;
   overflow: hidden;
-  min-width: 0;
-  min-height: 0;
-  position: relative;
+  border-radius: 0;
+  box-shadow: none;
 }
 
-.agent-rail::before,
-.chat-shell::before {
+.agent-layout::before {
   content: '';
   position: absolute;
-  inset: 0 0 auto 0;
-  height: 140px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0));
+  inset: 0;
   pointer-events: none;
+  opacity: 0.28;
+  background-image:
+    radial-gradient(rgba(71, 88, 67, 0.08) 0.7px, transparent 0.8px),
+    linear-gradient(115deg, transparent 0 48%, rgba(255, 255, 255, 0.34) 48% 52%, transparent 52% 100%);
+  background-size: 18px 18px, 100% 100%;
+  mix-blend-mode: multiply;
 }
 
-.rail-top {
-  padding: 18px 16px 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.24);
+.agent-rail,
+.chat-shell,
+.workspace-shell {
   position: relative;
   z-index: 1;
 }
 
-.rail-title {
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 12px;
+.agent-rail {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-right: 1px solid rgba(35, 39, 35, 0.09);
+  background:
+    radial-gradient(circle at 18% -8%, rgba(255, 255, 255, 1), transparent 34%),
+    radial-gradient(circle at 92% 40%, rgba(246, 247, 245, 0.5), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 249, 248, 0.96));
+  backdrop-filter: blur(28px) saturate(136%);
+  box-shadow:
+    inset -12px 0 34px rgba(24, 28, 24, 0.024),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.42);
+  border-radius: 0;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 14px 12px;
 }
 
-.rail-new {
+.agent-rail::before,
+.chat-shell::before,
+.workspace-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 170px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.rail-nav {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.rail-nav-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+}
+
+.rail-nav-row.has-action {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rail-nav-item {
+  appearance: none;
   width: 100%;
-  height: 40px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.36), rgba(206, 226, 236, 0.22));
-  color: var(--active-color);
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: transparent;
+  color: rgba(39, 43, 36, 0.82);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  text-align: left;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  font-weight: 600;
-  backdrop-filter: blur(16px);
-  box-shadow: var(--glass-shadow-soft);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    color var(--transition-fast),
+  transform var(--transition-fast);
 }
 
-.rail-new:hover:not(:disabled) {
+.rail-nav-row.has-action .rail-nav-item {
+  padding-right: 42px;
+}
+
+.rail-nav-item:hover,
+.rail-nav-item:focus-visible,
+.rail-nav-row.active .rail-nav-item {
+  background: rgba(255, 255, 255, 0.84);
+  border-color: rgba(222, 228, 219, 0.9);
+  box-shadow: 0 10px 22px rgba(46, 55, 42, 0.045);
+  outline: none;
+}
+
+.rail-nav-row.active .rail-nav-item,
+.rail-nav-item.active {
+  color: var(--page-accent-strong);
+  background:
+    radial-gradient(circle at 10% 16%, rgba(255, 255, 255, 0.96), transparent 38%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 244, 236, 0.82));
+  border-color: rgba(218, 226, 212, 0.9);
+  box-shadow:
+    0 10px 24px rgba(46, 55, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84);
+}
+
+.rail-nav-row.active .rail-nav-icon,
+.rail-nav-item.active .rail-nav-icon {
+  background:
+    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.84), transparent 34%),
+    rgba(32, 36, 32, 0.08);
+  color: var(--page-accent-strong);
+  box-shadow:
+    inset 0 0 0 1px rgba(32, 36, 32, 0.1),
+    0 8px 18px rgba(24, 28, 24, 0.08);
+}
+
+.rail-nav-label {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 820;
+  letter-spacing: 0.01em;
+}
+
+.rail-nav-icon {
+  position: relative;
+  flex: 0 0 23px;
+  width: 23px;
+  height: 23px;
+  border-radius: 8px;
+  color: rgba(74, 79, 74, 0.72);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(34, 38, 34, 0.08);
+  display: inline-grid;
+  place-items: center;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.rail-nav-item:hover .rail-nav-icon,
+.rail-nav-item:focus-visible .rail-nav-icon {
+  color: var(--page-accent-strong);
+  background: rgba(255, 255, 255, 0.92);
   transform: translateY(-1px);
-  box-shadow: 0 10px 26px rgba(74, 114, 158, 0.14);
 }
 
-.rail-new:disabled {
-  opacity: 0.6;
+.rail-nav-svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  overflow: visible;
+}
+
+.rail-nav-svg path {
+  vector-effect: non-scaling-stroke;
+}
+
+.rail-compose-btn {
+  appearance: none;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(46, 50, 46, 0.66);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: none;
+  transform: translateY(-50%) translateX(4px);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.rail-nav-row.has-action:hover .rail-compose-btn {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
+}
+
+.rail-compose-btn:hover:not(:disabled),
+.rail-compose-btn:focus-visible {
+  color: var(--page-accent-strong);
+  background: rgba(32, 36, 32, 0.06);
+  border-color: transparent;
+  box-shadow: none;
+  transform: translateY(-50%) translateX(0);
+  outline: none;
+}
+
+.rail-compose-btn:disabled {
+  opacity: 0.48;
   cursor: not-allowed;
 }
 
+.rail-compose-icon {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+.rail-conversations {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 160px;
+  margin-top: 10px;
+  padding: 10px 4px 0;
+  border-top: 1px solid rgba(35, 39, 35, 0.08);
+}
+
+.rail-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 820;
+  letter-spacing: 0.02em;
+  color: rgba(82, 84, 80, 0.66);
+}
+
+.rail-section-count {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(32, 36, 32, 0.055);
+  color: rgba(62, 66, 62, 0.72);
+  font-variant-numeric: tabular-nums;
+}
+
 .rail-search {
-  margin-top: 12px;
+  margin-top: 8px;
+  position: relative;
+  padding: 0 3px;
+}
+
+.rail-search::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border: 1.6px solid rgba(112, 114, 110, 0.32);
+  border-radius: 999px;
+  transform: translateY(-60%);
+  pointer-events: none;
+}
+
+.rail-search::after {
+  content: '';
+  position: absolute;
+  left: 27px;
+  top: 25px;
+  width: 6px;
+  height: 1.6px;
+  border-radius: 999px;
+  background: rgba(112, 114, 110, 0.32);
+  transform: rotate(45deg);
+  pointer-events: none;
 }
 
 .rail-search-input {
-  height: 40px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  background: rgba(255, 255, 255, 0.22);
-  padding: 0 12px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  height: 32px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(246, 246, 245, 0.74);
+  padding: 0 12px 0 35px;
+  box-shadow: none;
+  color: var(--page-ink);
+  font-size: 12px;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.rail-search-input::placeholder {
+  color: rgba(116, 118, 114, 0.62);
+}
+
+.rail-search-input:focus {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(32, 36, 32, 0.12);
+  box-shadow: 0 8px 18px rgba(24, 28, 24, 0.035);
 }
 
 .rail-list {
-  flex: 0 0 198px;
-  height: 198px;
+  flex: 1 1 auto;
   min-height: 0;
-  margin: 10px 0 0;
-  padding: 0 12px 12px;
+  margin-top: 8px;
+  padding: 2px 0 8px;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 1px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(113, 139, 158, 0.48) transparent;
+  scrollbar-color: rgba(116, 120, 116, 0.22) transparent;
   overscroll-behavior: contain;
-  position: relative;
-  z-index: 1;
 }
 
 .rail-list::-webkit-scrollbar {
@@ -1585,75 +2478,120 @@ onBeforeUnmount(() => {
 }
 
 .rail-list::-webkit-scrollbar-thumb {
-  background: rgba(113, 139, 158, 0.38);
+  background: rgba(116, 120, 116, 0.2);
   border-radius: 999px;
 }
 
 .rail-item {
   text-align: left;
   width: 100%;
-  min-height: 82px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.16);
-  border-radius: 18px;
-  padding: 10px 12px;
+  min-height: 44px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 8px;
+  padding: 7px 6px 7px 16px;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  backdrop-filter: blur(14px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+  box-shadow: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.rail-item::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 999px;
+  background: rgba(32, 36, 32, 0);
+  opacity: 0;
+  transform: scaleY(0.72);
+  transform-origin: center;
+  transition:
+    background-color var(--transition-fast),
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .rail-item-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
 }
 
 .rail-item:hover {
-  background: rgba(255, 255, 255, 0.24);
-  border-color: rgba(255, 255, 255, 0.42);
-  box-shadow: 0 12px 26px rgba(127, 153, 171, 0.12);
+  background: rgba(32, 36, 32, 0.024);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .rail-item.active {
-  background: linear-gradient(135deg, rgba(203, 226, 236, 0.34), rgba(255, 255, 255, 0.26));
-  border-color: rgba(255, 255, 255, 0.46);
-  box-shadow: 0 16px 32px rgba(119, 149, 170, 0.16);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.rail-item.active::before {
+  background: rgba(32, 36, 32, 0.68);
+  opacity: 1;
+  transform: scaleY(1);
 }
 
 .rail-item-title {
   flex: 1;
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--text-primary);
+  padding-left: 2px;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 680;
+  color: var(--page-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.rail-item.active .rail-item-title {
+  font-weight: 820;
+  letter-spacing: -0.01em;
+}
+
 .rail-title-input {
   flex: 1;
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.46);
-  border-radius: 10px;
+  border: 1px solid rgba(32, 36, 32, 0.14);
+  border-radius: 11px;
   padding: 4px 8px;
-  font-size: 13px;
-  background: rgba(255, 255, 255, 0.34);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.92);
 }
 
 .rail-item-actions {
   display: flex;
-  gap: 6px;
+  gap: 3px;
+  opacity: 0;
+  transform: translateX(2px);
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.rail-item:hover .rail-item-actions {
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .item-action-btn {
-  border: none;
+  border: 1px solid transparent;
   width: 24px;
   height: 24px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.24);
-  color: var(--text-secondary);
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(86, 88, 84, 0.5);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1662,13 +2600,14 @@ onBeforeUnmount(() => {
 }
 
 .item-action-btn:hover:not(:disabled) {
-  background: rgba(74, 114, 158, 0.18);
-  color: var(--active-color);
+  background: rgba(32, 36, 32, 0.06);
+  border-color: transparent;
+  color: rgba(32, 36, 32, 0.82);
 }
 
 .item-action-btn.danger:hover:not(:disabled) {
-  background: rgba(220, 53, 69, 0.18);
-  color: #dc3545;
+  background: rgba(188, 77, 67, 0.1);
+  color: #a33d35;
 }
 
 .item-action-btn:disabled {
@@ -1677,79 +2616,168 @@ onBeforeUnmount(() => {
 }
 
 .action-icon {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   display: block;
 }
 
-.rail-item-meta {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
 .rail-empty {
-  flex: 0 0 198px;
-  height: 198px;
-  padding: 16px;
-  color: var(--text-secondary);
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 88px;
+  margin-top: 8px;
+  padding: 14px 12px;
+  color: var(--page-muted);
+  border-radius: 18px;
+  border: 1px dashed rgba(97, 112, 89, 0.16);
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .rail-empty-title {
-  font-weight: 650;
-  color: var(--text-primary);
+  font-weight: 720;
+  color: var(--page-ink);
 }
 
 .rail-empty-sub {
-  margin-top: 6px;
-  font-size: 13px;
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rail-spacer {
+  flex: 0 0 4px;
 }
 
 .rail-player-slot {
-  margin-top: auto;
-  padding: 14px 12px 14px;
   position: relative;
   z-index: 1;
   min-width: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.28);
+  padding-top: 6px;
+}
+
+.rail-user-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(222, 229, 218, 0.86);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 12px 28px rgba(46, 55, 42, 0.055),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.rail-user-card--top {
+  margin-top: 0;
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 20px;
+}
+
+.rail-user-avatar {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 15px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 840;
   background:
-    linear-gradient(180deg, rgba(238, 247, 250, 0.68), rgba(238, 247, 250, 0.16) 26%, rgba(255, 255, 255, 0));
-  box-shadow: 0 -16px 28px rgba(224, 239, 244, 0.42);
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.9), transparent 42%),
+    linear-gradient(135deg, #f5f5f4, #d9d9d6);
+  box-shadow: 0 10px 20px rgba(24, 28, 24, 0.1);
+}
+
+.rail-user-avatar-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.rail-user-copy {
+  min-width: 0;
+}
+
+.rail-user-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--page-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-user-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(92, 101, 86, 0.66);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-shell {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.2));
-  border-radius: 34px;
-  box-shadow: var(--glass-shadow);
-  border: 1px solid rgba(255, 255, 255, 0.52);
+  background:
+    radial-gradient(circle at 88% 10%, rgba(248, 248, 247, 0.72), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 250, 0.94));
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
+  border-left: none;
   overflow: hidden;
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-width: 0;
-  position: relative;
-  backdrop-filter: blur(30px) saturate(170%);
+  backdrop-filter: blur(26px) saturate(140%);
 }
 
 .chat-topbar {
-  padding: 16px 18px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.1);
+  padding: 20px clamp(18px, 2vw, 30px) 16px;
+  border-bottom: 1px solid rgba(69, 83, 64, 0.08);
+  background: rgba(255, 255, 255, 0.42);
   min-width: 0;
   position: relative;
   z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.chat-eyebrow {
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(112, 116, 112, 0.68);
 }
 
 .chat-topbar-title {
-  font-weight: 700;
-  color: var(--text-primary);
+  margin-top: 4px;
+  font-size: clamp(20px, 1.6vw, 28px);
+  line-height: 1.18;
+  font-weight: 860;
+  letter-spacing: -0.035em;
+  color: var(--page-ink);
 }
 
 .chat-topbar-sub {
-  margin-top: 6px;
+  max-width: min(42%, 520px);
+  padding: 9px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(32, 36, 32, 0.08);
+  background: rgba(255, 255, 255, 0.42);
   font-size: 12px;
-  color: var(--text-secondary);
+  color: rgba(83, 91, 67, 0.72);
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -1761,60 +2789,80 @@ onBeforeUnmount(() => {
 }
 
 .chat-body {
-  padding: 20px 22px;
+  padding: clamp(16px, 1.6vw, 28px);
   overflow: auto;
   scroll-behavior: smooth;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
   min-width: 0;
 }
 
 .welcome-card,
 .progress-card {
-  background: rgba(255, 255, 255, 0.24);
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  border-radius: 24px;
-  padding: 18px 16px;
-  margin: 4px 0 16px;
-  box-shadow: var(--glass-shadow-soft);
-  backdrop-filter: blur(22px);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(231, 237, 227, 0.68), transparent 30%),
+    rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(222, 229, 218, 0.82);
+  border-radius: 28px;
+  padding: 22px;
+  margin: 4px 0 18px;
+  box-shadow: var(--page-shadow-soft);
+  backdrop-filter: blur(18px);
+}
+
+.welcome-kicker {
+  margin-bottom: 8px;
+  color: rgba(92, 96, 92, 0.7);
+  font-size: 12px;
+  font-weight: 840;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .welcome-title,
 .progress-title {
-  font-weight: 700;
-  color: var(--text-primary);
+  font-weight: 840;
+  color: var(--page-ink);
   margin-bottom: 6px;
+}
+
+.welcome-title {
+  font-size: clamp(24px, 2vw, 34px);
+  letter-spacing: -0.04em;
 }
 
 .welcome-sub,
 .progress-sub {
   font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
+  color: var(--page-muted);
+  margin-bottom: 14px;
+  line-height: 1.7;
 }
 
 .quick-questions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-sm);
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .quick-question {
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: 1px solid rgba(255, 255, 255, 0.34);
+  padding: 9px 14px;
+  border: 1px solid rgba(124, 143, 99, 0.16);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.24);
-  color: var(--text-secondary);
-  font-size: 14px;
+  background: rgba(255, 255, 255, 0.5);
+  color: rgba(60, 72, 49, 0.78);
+  font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
   transition: all var(--transition-normal);
   backdrop-filter: blur(14px);
 }
 
 .quick-question:hover {
-  background: rgba(255, 255, 255, 0.34);
-  border-color: rgba(255, 255, 255, 0.46);
+  background: rgba(32, 36, 32, 0.06);
+  border-color: rgba(32, 36, 32, 0.14);
+  transform: translateY(-1px);
 }
 
 .progress-head {
@@ -1826,8 +2874,8 @@ onBeforeUnmount(() => {
 
 .progress-current {
   font-size: 13px;
-  color: var(--active-color);
-  font-weight: 600;
+  color: var(--page-accent-strong);
+  font-weight: 720;
 }
 
 .progress-steps {
@@ -1846,21 +2894,21 @@ onBeforeUnmount(() => {
   height: 10px;
   border-radius: 999px;
   margin-top: 6px;
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(93, 87, 63, 0.18);
   flex: 0 0 auto;
 }
 
 .progress-step.is-completed .step-dot {
-  background: #2f9e44;
+  background: #5d7f47;
 }
 
 .progress-step.is-in_progress .step-dot {
-  background: #1b6bce;
-  box-shadow: 0 0 0 6px rgba(27, 107, 206, 0.12);
+  background: #d0a251;
+  box-shadow: 0 0 0 6px rgba(208, 162, 81, 0.14);
 }
 
 .progress-step.is-failed .step-dot {
-  background: #dc3545;
+  background: #bc4d43;
 }
 
 .step-body {
@@ -1869,13 +2917,13 @@ onBeforeUnmount(() => {
 
 .step-label {
   font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-weight: 720;
+  color: var(--page-ink);
 }
 
 .step-desc {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--page-muted);
   margin-top: 2px;
 }
 
@@ -1884,7 +2932,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   margin-top: 14px;
   padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.24);
+  border-top: 1px solid rgba(97, 90, 64, 0.1);
 }
 
 .tool-item {
@@ -1896,44 +2944,134 @@ onBeforeUnmount(() => {
 }
 
 .tool-name {
-  color: var(--text-primary);
+  color: var(--page-ink);
   word-break: break-all;
 }
 
 .tool-status {
   text-transform: capitalize;
-  color: var(--text-secondary);
+  color: var(--page-muted);
 }
 
 .tool-status.is-running {
-  color: #1b6bce;
+  color: #b58132;
 }
 
 .tool-status.is-success {
-  color: #2f9e44;
+  color: #5d7f47;
 }
 
 .tool-status.is-failed {
-  color: #dc3545;
+  color: #bc4d43;
+}
+
+.agent-observability {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(93, 83, 57, 0.12);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(247, 241, 228, 0.62)),
+    repeating-linear-gradient(90deg, rgba(80, 74, 54, 0.035) 0 1px, transparent 1px 18px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.observability-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  color: var(--page-ink);
+  text-transform: uppercase;
+}
+
+.observability-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--page-accent-strong);
+}
+
+.observability-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--page-muted);
+}
+
+.observability-meta span {
+  padding: 4px 7px;
+  border: 1px solid rgba(93, 83, 57, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.thought-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.thought-item {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.thought-kind {
+  color: #8f6632;
+  font-weight: 820;
+}
+
+.thought-text {
+  color: var(--page-ink);
+  overflow-wrap: anywhere;
+}
+
+.thought-item.is-reflection .thought-kind,
+.reflection-label {
+  color: var(--page-accent-strong);
+}
+
+.reflection-box {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(93, 83, 57, 0.1);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--page-ink);
+}
+
+.reflection-label {
+  flex: 0 0 auto;
+  font-weight: 840;
 }
 
 .chat-error-banner {
-  margin: 0 18px 8px;
+  margin: 0 20px 10px;
   padding: 10px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  background: rgba(255, 240, 244, 0.6);
-  color: #8e3b4b;
+  border: 1px solid rgba(188, 77, 67, 0.16);
+  background: rgba(255, 241, 235, 0.74);
+  color: #9b4439;
   font-size: 13px;
   line-height: 1.5;
-  box-shadow: var(--glass-shadow-soft);
+  box-shadow: var(--page-shadow-soft);
   backdrop-filter: blur(18px);
 }
 
 .chat-input {
-  padding: 14px 16px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.26);
-  background: rgba(255, 255, 255, 0.08);
+  padding: 14px clamp(14px, 1.4vw, 22px) 18px;
+  border-top: 1px solid rgba(110, 100, 69, 0.08);
+  background: rgba(255, 255, 255, 0.18);
   min-width: 0;
 }
 
@@ -1942,19 +3080,19 @@ onBeforeUnmount(() => {
   gap: 10px;
   align-items: center;
   min-width: 0;
-  padding: 6px;
+  padding: 7px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  background: rgba(255, 255, 255, 0.2);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), var(--glass-shadow-soft);
-  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.52);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58), var(--page-shadow-soft);
+  backdrop-filter: blur(22px);
 }
 
 .message-input {
   flex: 1;
   min-width: 0;
   border-radius: 999px;
-  padding: 12px 14px;
+  padding: 12px 15px;
   border: none;
   background: transparent;
   box-shadow: none;
@@ -1971,17 +3109,18 @@ onBeforeUnmount(() => {
   height: 42px;
   padding: 0 18px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  background: linear-gradient(135deg, rgba(84, 119, 147, 0.94), rgba(133, 168, 187, 0.88));
-  color: #fff;
+  border: 1px solid rgba(32, 36, 32, 0.12);
+  background: linear-gradient(135deg, #2f332f, #6f746f);
+  color: #ffffff;
   cursor: pointer;
   transition: all var(--transition-fast);
-  box-shadow: 0 10px 22px rgba(89, 122, 149, 0.24);
+  box-shadow: 0 13px 24px rgba(24, 28, 24, 0.16);
+  font-weight: 760;
 }
 
 .send-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  background: linear-gradient(135deg, rgba(73, 109, 138, 0.96), rgba(124, 159, 179, 0.92));
+  filter: brightness(1.03);
 }
 
 .send-btn:disabled {
@@ -1989,6 +3128,182 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
+.workspace-shell {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 0;
+  border: none;
+  border-left: none;
+  background:
+    radial-gradient(circle at 78% 12%, rgba(248, 248, 247, 0.72), transparent 28%),
+    radial-gradient(circle at 18% 88%, rgba(250, 250, 249, 0.86), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 250, 0.94));
+  box-shadow: none;
+  overflow: hidden;
+  padding: clamp(22px, 2.2vw, 38px);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: clamp(18px, 2vw, 28px);
+}
+
+.workspace-hero {
+  position: relative;
+  z-index: 1;
+  max-width: 720px;
+}
+
+.workspace-eyebrow {
+  font-size: 12px;
+  font-weight: 860;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(112, 116, 112, 0.68);
+}
+
+.workspace-hero h1 {
+  margin: 8px 0 10px;
+  font-size: clamp(32px, 4vw, 58px);
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: -0.07em;
+  color: var(--page-ink);
+}
+
+.workspace-hero p {
+  max-width: 620px;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--page-muted);
+}
+
+.workspace-empty-card {
+  position: relative;
+  z-index: 1;
+  align-self: stretch;
+  min-height: 0;
+  border-radius: 34px;
+  border: 1px dashed rgba(32, 36, 32, 0.14);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(249, 249, 248, 0.78));
+  display: grid;
+  place-items: center;
+  padding: clamp(22px, 3vw, 48px);
+  text-align: center;
+}
+
+.workspace-empty-mark {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 18px;
+  border-radius: 28px;
+  color: var(--page-accent-strong);
+  background: rgba(255, 255, 255, 0.62);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 18px 36px rgba(24, 28, 24, 0.07), inset 0 0 0 1px rgba(224, 224, 222, 0.82);
+}
+
+.workspace-empty-icon {
+  width: 36px;
+  height: 36px;
+  display: block;
+  overflow: visible;
+}
+
+.workspace-empty-icon path {
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-empty-copy h2 {
+  margin: 0;
+  font-size: clamp(20px, 2vw, 30px);
+  font-weight: 860;
+  letter-spacing: -0.04em;
+  color: var(--page-ink);
+}
+
+.workspace-empty-copy p {
+  max-width: 560px;
+  margin: 10px auto 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--page-muted);
+}
+
+@media (max-width: 980px) {
+  .agent-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    overflow: auto;
+    border-radius: 0;
+  }
+
+  .agent-rail {
+    height: auto;
+    max-height: none;
+    border-radius: 0;
+    border-right: none;
+    border-bottom: 1px solid rgba(126, 117, 82, 0.1);
+  }
+
+  .rail-conversations {
+    max-height: 280px;
+  }
+
+  .chat-shell,
+  .workspace-shell {
+    min-height: 680px;
+    border-radius: 0;
+    border-left: none;
+    border-top: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .agent-layout {
+    padding: 0;
+    gap: 0;
+  }
+
+  .agent-rail,
+  .chat-shell,
+  .workspace-shell {
+    border-radius: 0;
+  }
+
+  .agent-rail {
+    padding: 12px;
+  }
+
+  .rail-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rail-nav-item {
+    min-height: 36px;
+    padding: 0 9px;
+  }
+
+  .chat-topbar {
+    flex-direction: column;
+  }
+
+  .chat-topbar-sub {
+    max-width: 100%;
+  }
+
+  .input-form {
+    border-radius: 22px;
+    align-items: stretch;
+  }
+
+  .send-btn {
+    padding: 0 14px;
+  }
+}
 .music-fullscreen-page {
   position: fixed;
   inset: 0;

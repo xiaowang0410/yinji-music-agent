@@ -303,8 +303,8 @@ export function useMusicPlayer() {
   })
   const progressSliderStyle = computed(() => ({
     '--slider-fill': `${progressRatio.value}%`,
-    '--slider-fill-color': 'rgba(255, 255, 255, 0.96)',
-    '--slider-rest-color': 'rgba(186, 203, 218, 0.62)',
+    '--slider-fill-color': '#303330',
+    '--slider-rest-color': 'rgba(32, 36, 32, 0.12)',
   }))
   const volumeSliderStyle = computed(() => ({
     '--slider-fill': `${volumeRatio.value}%`,
@@ -430,6 +430,33 @@ export function useMusicPlayer() {
       pendingSongId.value = ''
       isAudioBuffering.value = false
       playerError.value = '播放器暂时无法继续播放。'
+    }
+  }
+
+  function pauseCurrentTrack() {
+    const audio = audioPlayer.value
+    if (!audio || !currentTrack.value) return false
+    pendingSongId.value = ''
+    isAudioBuffering.value = false
+    audio.pause()
+    return true
+  }
+
+  async function resumeCurrentTrack() {
+    const audio = audioPlayer.value
+    if (!audio || !currentTrack.value) return false
+    playerError.value = ''
+    try {
+      pendingSongId.value = currentTrack.value.id
+      isAudioBuffering.value = true
+      await audio.play()
+      return true
+    } catch (error) {
+      console.error('resume current track error:', error)
+      pendingSongId.value = ''
+      isAudioBuffering.value = false
+      playerError.value = '播放器暂时无法继续播放。'
+      return false
     }
   }
 
@@ -669,6 +696,7 @@ export function useMusicPlayer() {
     currentTrackId,
     currentLyricIndex,
     currentLyrics,
+    currentQueue,
     elapsedTimeLabel,
     handleAudioEnded,
     handleAudioError,
@@ -685,6 +713,7 @@ export function useMusicPlayer() {
     isAudioPlaying,
     isMuted,
     lyricsLoading,
+    pauseCurrentTrack,
     pendingSongId,
     playNextTrack,
     playbackOrderMode,
@@ -700,6 +729,7 @@ export function useMusicPlayer() {
     progressSliderStyle,
     remainingTimeLabel,
     repeatMode,
+    resumeCurrentTrack,
     secondaryLyricLine,
     setPlayerError,
     seekCurrentTrack,

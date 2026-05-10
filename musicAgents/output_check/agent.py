@@ -20,6 +20,12 @@ system_prompt = (
 )
 
 _DIRECT_LINK_TOOLS = {"song_url_v1", "song_download_url_v1"}
+_SILENT_PLAYER_ACTIONS = {
+    "player_pause",
+    "player_resume",
+    "player_next_track",
+    "player_previous_track",
+}
 
 _SONG_ID_KEYS = (
     "id",
@@ -204,6 +210,16 @@ _SONG_CARD_CONFIG = {
     "personalized_newsong": {
         "title": "个性化推荐新歌",
         "keys": ("个性化推荐新歌", "推荐新音乐", "songs", "歌曲列表", "歌曲"),
+        "unit": "首歌",
+    },
+    "search_song_candidates": {
+        "title": "歌曲搜索结果",
+        "keys": ("songs", "歌曲列表", "歌曲"),
+        "unit": "首歌",
+    },
+    "search_scene_songs": {
+        "title": "场景歌曲推荐",
+        "keys": ("songs", "歌曲列表", "歌曲"),
         "unit": "首歌",
     },
 }
@@ -771,6 +787,13 @@ def format_structured_output(tool_result) -> str | None:
     tool_name = _extract_final_tool_name(tool_result)
     result = _extract_final_result(tool_result)
 
+    if tool_name in _SILENT_PLAYER_ACTIONS:
+        return ""
+
+    if isinstance(result, dict) and result.get("kind") in {"client_action", "player_tool_result"}:
+        message = str(result.get("message") or "").strip()
+        return message or None
+
     if tool_name in _DIRECT_LINK_TOOLS:
         return _format_song_link(tool_name, result)
 
@@ -793,6 +816,23 @@ def _extract_direct_final_text(tool_result: Any) -> str:
 def extract_rich_content(tool_result) -> dict[str, Any] | None:
     tool_name = _extract_final_tool_name(tool_result)
     result = _extract_final_result(tool_result)
+
+    if isinstance(result, dict) and result.get("kind") == "player_tool_result":
+        source = str(result.get("rich_content_source") or "").strip()
+        content = result.get("content")
+        if source == "liked_songs":
+            return _build_liked_songs_rich_content(content)
+        song_config = _SONG_CARD_CONFIG.get(source)
+        if song_config:
+            return _build_song_list_rich_content(
+                content,
+                title=song_config["title"],
+                total_hint=_extract_total_hint(content),
+                keys=song_config["keys"],
+                unit=song_config["unit"],
+            )
+        if source == "search":
+            return _build_search_rich_content(content)
 
     if tool_name == "liked_songs":
         return _build_liked_songs_rich_content(result)
@@ -829,6 +869,52 @@ def extract_rich_content(tool_result) -> dict[str, Any] | None:
         )
 
     return None
+
+
+def extract_client_action(tool_result) -> dict[str, Any] | None:
+    result = _extract_final_result(tool_result)
+    if not isinstance(result, dict):
+        return None
+
+    candidate = result.get("client_action") if isinstance(result.get("client_action"), dict) else result
+    if (
+        isinstance(candidate, dict)
+        and candidate.get("kind") == "client_action"
+        and (candidate.get("type") or candidate.get("action"))
+    ):
+        legacy_action = candidate.get("action") if isinstance(candidate.get("action"), dict) else {}
+        action_name = str(legacy_action.get("action") or "").strip()
+        payload = candidate.get("payload")
+        if not isinstance(payload, dict):
+            payload = legacy_action.get("payload") if isinstance(legacy_action.get("payload"), dict) else {}
+        return {
+            "kind": "client_action",
+            "version": str(candidate.get("version") or "1.0"),
+            "id": str(candidate.get("id") or "").strip(),
+            "type": str(candidate.get("type") or "").strip(),
+            "status": str(candidate.get("status") or "ready").strip(),
+            "action": action_name,
+            "payload": payload,
+            "message": str(candidate.get("message") or result.get("message") or "").strip(),
+            "requires_confirmation": bool(candidate.get("requires_confirmation")),
+            "error": candidate.get("error"),
+            "success": bool(candidate.get("success", True)),
+        }
+
+    action = result.get("action")
+    if not isinstance(action, dict):
+        return None
+
+    action_name = str(action.get("action") or "").strip()
+    if not action_name:
+        return None
+
+    payload = action.get("payload")
+    return {
+        "action": action_name,
+        "payload": payload if isinstance(payload, dict) else {},
+        "message": str(result.get("message") or "").strip(),
+    }
 
 
 def _looks_like_failure_text(text: str | None) -> bool:
@@ -905,7 +991,7 @@ def _fallback_output(tool_result) -> str:
 
 @lru_cache(maxsize=4)
 def _polisher_llm(model: str):
-    return get_llm(model=model, timeout=40)
+    return get_llm(model=model or None, timeout=40, task="polish")
 
 
 def should_polish_response(raw_text: str | None, tool_result) -> bool:
@@ -915,6 +1001,12 @@ def should_polish_response(raw_text: str | None, tool_result) -> bool:
     text = str(raw_text or "").strip()
 
     if tool_name in _DIRECT_LINK_TOOLS and format_structured_output(tool_result):
+        return False
+
+    if tool_name in _SILENT_PLAYER_ACTIONS:
+        return False
+
+    if isinstance(result, dict) and result.get("kind") in {"client_action", "player_tool_result"}:
         return False
 
     if _looks_like_failure_text(text):
